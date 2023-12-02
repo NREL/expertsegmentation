@@ -1,0 +1,20 @@
+{
+    "volume_fraction_targets": {
+        "1": 0.220554,
+        "2": 0.629608,
+        "3": 0.062470,
+        "4": 0.030925,
+        "5": 0.056443
+    },
+    "connectivity_target": 0,
+    "circularity_target": 0,
+    "lambdas": [1],
+    "filters": {
+        "gaussian_smoothing": [0.3, 0.7, 1, 1.6, 3.5, 5, 10],
+        "laplacian_of_gaussian": [0.7, 1, 1.6, 3.5, 5, 10],
+        "gaussian_gradient_magnitude": [0.7, 1, 1.6, 3.5, 5, 10],
+        "diff_of_gaussians": [0.7, 1, 1.6, 3.5, 5, 10],
+        "structure_tensor_eigvals": [0.7, 1, 1.6, 3.5, 5, 10],
+        "hessian_of_gaussian_eigvals": [0.7, 1, 1.6, 3.5, 5, 10]
+    }
+}
