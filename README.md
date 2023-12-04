@@ -4,7 +4,13 @@ Repo for decision tree-based semantic segmentation of microstructural images wit
 
 ## Setup
 
-TODO
+Recommended to use Anaconda distribution for Python environments and package management: https://www.anaconda.com/download
+
+Run in a terminal from the top level of the repo:
+```
+$ conda env create -f environment.yml
+$ conda activate expert-seg
+```
 
 
 ## Instructions
@@ -26,5 +32,5 @@ TODO
 3. Run the following command in the terminal:
 
 ```
-python main.py -i <path to raw input image> -l <path to labeled input image>
+$ python expert-segmentation/main.py -i <path to raw input image> -l <path to labeled input image>
 ```

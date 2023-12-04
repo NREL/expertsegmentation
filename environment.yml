@@ -1,0 +1,16 @@
+name: expert-seg
+dependencies:
+  - matplotlib
+  - numpy
+  - pandas
+  - pip
+  - prettytable
+  - scikit-image
+  - scikit-learn
+  - scipy
+  - tifffile
+  - xgboost
+  - pip:
+    - structure-tensor
+    - torch
+    - opencv-python

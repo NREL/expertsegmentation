@@ -165,7 +165,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
 
     # Get user inputs (for now one type of input at a time)
     volume_fraction_targets = user_input.volume_fraction_targets
-    # connectivity_target = user_input.connectivity_target
+    # connectivity_target = user_input.connectivity_target - 1  # subtract to map to xgboost labels
 
     # Run model for each lambda
     softmax_losses_per_lambda = dict()
