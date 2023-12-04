@@ -13,7 +13,6 @@ from structure_tensor import (
     structure_tensor_3d,
 )
 import tifffile
-import torch
 
 
 def load_json(fn):
@@ -31,7 +30,7 @@ class UserInputs:
         )
         self.connectivity_target = self.user_input_dict["connectivity_target"]
         self.circularity_target = self.user_input_dict["circularity_target"]
-        self.lambd = self.user_input_dict["lambda"]
+        self.lambdas = self.user_input_dict["lambdas"]
 
 
 class SegDataset:

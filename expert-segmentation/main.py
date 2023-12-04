@@ -53,13 +53,11 @@ if __name__ == "__main__":
     )
 
     # 2. Run segmentation with targets
-    yhat_probabilities, yhat_labels, softmax_losses, custom_losses = run_xgboost(
-        dataset, user_input
-    )
+    loss_dict, result_dict = run_xgboost(dataset, user_input)
 
     # 3. Display results and metrics
-    plot_results(yhat_labels)
-    print_metrics(yhat_labels, dataset, user_input)
+    print_metrics(result_dict, dataset, user_input)
+    plot_results(result_dict, loss_dict)
     print()
 
     """

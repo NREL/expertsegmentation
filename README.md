@@ -17,6 +17,12 @@ TODO
 
 
 2. In data/user_input.json, set the domain targets and the parameters for input feature transformations.
+
+        'Volume fraction targets' is a dictionary where the keys are class labels and values are the target fraction per class.
+        'Connectivity target' refers to the class label to maximize connectivity on.
+        'Circularity target' refers to the class label to maximize circularity on.
+
+
 3. Run the following command in the terminal:
 
 ```

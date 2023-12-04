@@ -6,8 +6,8 @@
         "4": 0.030925,
         "5": 0.056443
     },
-    "connectivity_target": 0,
-    "circularity_target": 0,
+    "connectivity_target": 1,
+    "circularity_target": 2,
     "lambdas": [1],
     "filters": {
         "gaussian_smoothing": [0.3, 0.7, 1, 1.6, 3.5, 5, 10],
