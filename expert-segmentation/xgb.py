@@ -9,7 +9,7 @@ from torch.nn import CrossEntropyLoss
 import xgboost as xgb
 
 from data import SegDataset, UserInputs
-from metrics import calculate_volume_fractions, calculate_perc_isolated_components
+from metrics import calculate_volume_fractions, calculate_connectivities
 
 
 def softmax(z):
@@ -102,11 +102,9 @@ def connectivity_obj(pred, lambd, c, n_classes, H, W, D=None):
     else:
         pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
 
-    perc_connected_components = calculate_perc_isolated_components(
-        pred_labels, n_classes=n_classes, c=c
-    )
-    loss = lambd * perc_connected_components**2
-    grad_val = 2 * lambd * perc_connected_components
+    connectivity = calculate_connectivities(pred_labels, n_classes=n_classes)[c]
+    loss = -1 * lambd * connectivity**2  # Negative because want to *maximize* connectivity
+    grad_val = -1 * 2 * lambd * connectivity
     gradient = np.full(pred.shape, grad_val)
 
     return loss, gradient.flatten(), 0
@@ -148,6 +146,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     dtest = xgb.DMatrix(X_test)
 
     # Run default loss first
+    print("Evaluating with native loss...")
     model_default_loss = xgb.train(params, dtrain, 100)
     yhat_probs_default = model_default_loss.predict(dtest)
     yhat_probs_default = yhat_probs_default.reshape(
@@ -165,7 +164,9 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
 
     # Get user inputs (for now one type of input at a time)
     volume_fraction_targets = user_input.volume_fraction_targets
-    # connectivity_target = user_input.connectivity_target - 1  # subtract to map to xgboost labels
+    # connectivity_target = (
+        # user_input.connectivity_target - 1
+    # )  # subtract to map to xgboost labels
 
     # Run model for each lambda
     softmax_losses_per_lambda = dict()
@@ -173,6 +174,8 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     yhat_probabilities_per_lambda = dict()
     yhat_labels_per_lambda = dict()
     for lambd in user_input.lambdas:
+
+        print(f"Evaluating for lambda = {lambd}...")
 
         # Run training and save losses (100 epochs)
         softmax_losses = []

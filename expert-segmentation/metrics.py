@@ -46,44 +46,30 @@ def calculate_kl_div(distr1: np.ndarray, distr2: np.ndarray):
     return entropy(distr1, distr2)
 
 
-def calculate_perc_isolated_components(labels: np.ndarray, n_classes: int, c: int):
-    """Calculate normalized number isolated components of given class.
-
-    Use openCV's connectedComponents() to get the number of isolated components
-    in the given class, then normalize this by the total number of components.
-
-    Args:
-        labels:     Segmented image.
-        n_classes:  Number of unique classes in the dataset.
-        c:          Class label of interest
-
-    """
-    # TODO IMPLEMENT THIS IN 3D
-    n_components_class_c, _ = cv2.connectedComponents((labels == c).astype(np.uint8))
-    total_n_components = n_components_class_c
-    for cl in list(range(n_classes)):
-        if cl != c:
-            n_components, _ = cv2.connectedComponents((labels == cl).astype(np.uint8))
-            total_n_components += n_components
-    return n_components_class_c / total_n_components
-
-
 def calculate_connectivities(labels: np.ndarray, n_classes: int):
-    """Calculate connectivity of a segmented image.
+    """Calculate connectivity of a segmented image for each unique class.
 
     Define connectivity as (1 - normalized number of isolated components).
+    Assumes that the labels go from 0 to n_classes - 1.
 
     Args:
-        labels:     Segmented image with integer type
+        labels:     Segmented image with integer type.
         n_classes:  Number of unique classes in the dataset
 
     Return:
         result_dict:    Dictionary with connectivity value per class.
     """
     classes = list(range(n_classes))
-    result_dict = dict()
+
+    # Array of number of isolated components per class
+    n_isolated_components = np.zeros(n_classes)
     for c in classes:
-        result_dict[c] = 1 - calculate_perc_isolated_components(labels, n_classes, c)
+        n_isolated_components[c] = cv2.connectedComponents(
+            (labels == c).astype(np.uint8)
+        )[0]
+    result_dict = {
+        c: 1 - n_isolated_components[c] / n_isolated_components.sum() for c in classes
+    }
     return result_dict
 
 
