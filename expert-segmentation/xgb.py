@@ -9,7 +9,11 @@ from torch.nn import CrossEntropyLoss
 import xgboost as xgb
 
 from data import SegDataset, UserInputs
-from metrics import calculate_volume_fractions, calculate_connectivities
+from metrics import (
+    calculate_volume_fractions,
+    calculate_connectivities,
+    calculate_circularity,
+)
 
 
 def softmax(z):
@@ -42,7 +46,6 @@ def softmaxobj(preds, dtrain):
     )
 
     grad = preds - labels
-    grad[:, 3] = grad[:, 3] * 5
     hess = 2.0 * preds * (1.0 - preds)
 
     # XGBoost wants them to be returned as 1-d vectors
@@ -75,14 +78,16 @@ def volume_fraction_obj(pred, lambd, target_distr):
     return loss, grad.flatten(), 0
 
 
-def connectivity_obj(pred, lambd, c, n_classes, H, W, D=None):
+def connectivity_obj(
+    pred: np.ndarray, lambd: int, c: int, n_classes: int, H: int, W: int, D: int = None
+):
     """
     Define "connectivity" loss term to penalize the connectivity of
     a particular class. i.e. the "blue" class (carbon binder) should
     be highly connected.
 
     Args:
-        pred: Predicted probabilities per pixel.
+        pred: Predicted probabilities per pixel (n_pixels, n_classes)
         lambd: Lambda to weight connectivity loss term
         c: The class of interest
         n_classes: Number of unique labeled classes in the dataset
@@ -91,10 +96,10 @@ def connectivity_obj(pred, lambd, c, n_classes, H, W, D=None):
         D: Depth of original input image, if 3D, else None
 
     loss =
-        lambda * || n_components in class 0 / total n_components || **2
+        lambda * || 1 - n_components in class 0 / total n_components || **2
 
     gradient =
-        2 * lambda * || n_components in class 0 / total n_components ||
+        2 * lambda * || 1 - n_components in class 0 / total n_components ||
 
     """
     if D is None:
@@ -103,8 +108,59 @@ def connectivity_obj(pred, lambd, c, n_classes, H, W, D=None):
         pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
 
     connectivity = calculate_connectivities(pred_labels, n_classes=n_classes)[c]
-    loss = -1 * lambd * connectivity**2  # Negative because want to *maximize* connectivity
+    loss = (
+        -1 * lambd * connectivity**2
+    )  # Negative because want to *maximize* connectivity
     grad_val = -1 * 2 * lambd * connectivity
+    gradient = np.full(pred.shape, grad_val)
+
+    return loss, gradient.flatten(), 0
+
+
+def circularity_obj(
+    pred: np.ndarray,
+    lambd: int,
+    c: int,
+    target_circularity: float,
+    img: np.ndarray,
+    H: int,
+    W: int,
+    D: int = None,
+):
+    """
+    Define "circularity" loss term to penalize the shape of a particular
+    class towards a target average circularity across the image.
+
+    For every connected component of class c in the image:
+
+        circularity = 4 * pi * Area / Perimeter**2
+
+    loss =
+        lambda * || predicted_average_circularity - target_circularity ||**2
+
+    gradient =
+        2 * lambda * || predicted_average_circularity - target_circularity ||
+
+
+    Args:
+        pred: Predicted probabilities per pixel (n_pixels, n_classes)
+        lambd: Lambda to weight connectivity loss term
+        c: The class of interest
+        target_ciricularity: Average circularity
+        img: The original image with intensity values
+        H: Height of original input image
+        W: Width of original input image
+        D: Depth of original input image, if 3D, else None
+
+    """
+    if D is None:
+        pred_labels = np.argmax(pred, axis=1).reshape((H, W)).astype(np.uint8)
+    else:
+        pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
+
+    circularity = calculate_circularity(pred_labels, img, c)
+    loss = lambd * np.linalg.norm(circularity - target_circularity) ** 2
+    grad_val = 2 * lambd * circularity
     gradient = np.full(pred.shape, grad_val)
 
     return loss, gradient.flatten(), 0
@@ -143,7 +199,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
 
     dtrain = xgb.DMatrix(X_train, label=y_train)
     dtrain_full_image = xgb.DMatrix(X_test)
-    dtest = xgb.DMatrix(X_test)
+    dtest = dtrain_full_image  # xgb.DMatrix(X_test)
 
     # Run default loss first
     print("Evaluating with native loss...")
@@ -163,10 +219,14 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     loss = CrossEntropyLoss()
 
     # Get user inputs (for now one type of input at a time)
-    volume_fraction_targets = user_input.volume_fraction_targets
+    # volume_fraction_targets = user_input.volume_fraction_targets
     # connectivity_target = (
-        # user_input.connectivity_target - 1
+    # user_input.connectivity_target - 1
     # )  # subtract to map to xgboost labels
+    circularity_target_class = (
+        user_input.circularity_target_class - 1
+    )  # Subtract to map to xgboost labels
+    circularity_target_value = user_input.circularity_target_value
 
     # Run model for each lambda
     softmax_losses_per_lambda = dict()
@@ -180,46 +240,62 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
         # Run training and save losses (100 epochs)
         softmax_losses = []
         custom_losses = []
-        for _ in range(100):
+        for i in range(100):
+            if (i%10 == 0):
+                print("\tepoch {i}")
             pred = model.predict(dtrain)
             g_softmax, h_softmax = softmaxobj(
                 pred, dtrain
             )  # ONLY FOR THE TRAINING PIXELS (the ones w a label)
 
             pred_full_image = model.predict(dtrain_full_image)  # ENTIRE IMAGE
-            l_vf, g_vf, h_vf = volume_fraction_obj(
-                pred_full_image, lambd=lambd, target_distr=volume_fraction_targets
-            )  # VOLUME FRACTION PENALTY ON ENTIRE IMAGE
+            # l_vf, g_vf, h_vf = volume_fraction_obj(
+            #     pred_full_image, lambd=lambd, target_distr=volume_fraction_targets
+            # )  # VOLUME FRACTION PENALTY ON ENTIRE IMAGE
             # l_conn, g_conn, h_conn = connectivity_obj(
-            # pred_full_image,
-            # lambd,
-            # connectivity_target,
-            # dataset.n_classes,
-            # *dataset.raw_img.shape
+                # pred_full_image,
+                # lambd,
+                # connectivity_target,
+                # dataset.n_classes,
+                # *dataset.raw_img.shape,
             # )  # CONNECTIVITY PENALTY ON THE ENTIRE IMAGE
+            l_circ, g_circ, h_circ = circularity_obj(
+                pred_full_image,
+                lambd,
+                circularity_target_class,
+                circularity_target_value,
+                dataset.raw_img,
+                *dataset.raw_img.shape,
+            )
 
             # Re-reduce to only the labeled pixels
-            g_vf = g_vf.reshape(
-                (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
-            )[dataset.labeled_img != unlabeled].flatten()
+            # g_vf = g_vf.reshape(
+            #     (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
+            # )[dataset.labeled_img != unlabeled].flatten()
             # g_conn = g_conn.reshape(
             #     (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
             # )[
             #     dataset.labeled_img != unlabeled
             # ].flatten()  # CONNECTIVITY PENALTY ON THE TRAINING PIXELS
+            g_circ = g_circ.reshape(
+                (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
+            )[dataset.labeled_img != unlabeled].flatten()
 
             # Compute the actual losses and save for later
             l_softmax = loss(
                 from_numpy(pred), from_numpy(dtrain.get_label().astype(np.uint8))
             )
             softmax_losses.append(l_softmax)
-            custom_losses.append(l_vf)
+            # custom_losses.append(l_vf)
             # custom_losses.append(l_conn)
+            custom_losses.append(l_circ)
 
-            g = g_softmax + g_vf
+            # g = g_softmax + g_vf
             # g = g_softmax + g_conn
-            h = h_softmax + h_vf
+            g = g_softmax + g_circ
+            # h = h_softmax + h_vf
             # h = h_softmax + h_conn
+            h = h_softmax + h_circ
 
             model.boost(dtrain, g, h)
 

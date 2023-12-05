@@ -1,16 +1,17 @@
 name: expert-seg
 dependencies:
-  - matplotlib
-  - numpy
-  - pandas
+  - python=3.11
+  - matplotlib=3.8.0
+  - numpy=1.23.5
+  - pandas=2.1.1
   - pip
-  - prettytable
-  - scikit-image
-  - scikit-learn
-  - scipy
-  - tifffile
-  - xgboost
+  - prettytable=3.9.0
+  - scikit-image=0.22.0
+  - scikit-learn=1.3.1
+  - scipy=1.11.3
+  - tifffile=2023.9.26
+  - xgboost=2.0.0
   - pip:
-    - structure-tensor
-    - torch
-    - opencv-python
+    - structure-tensor=0.2.0
+    - torch=2.1.0
+    - opencv-python=4.8.1

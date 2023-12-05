@@ -7,8 +7,51 @@ import matplotlib.pyplot as plt
 import numpy as np
 from prettytable import PrettyTable
 from scipy.stats import entropy
+from skimage.measure import regionprops_table
 
 from data import SegDataset, UserInputs
+
+
+def calculate_circularity(labels: np.ndarray, image: np.ndarray, c: int):
+    """Calculate average circularity of given class in an image.
+
+    Args:
+        labels: Segmented image with integer type.
+        image: The original raw image.
+        c: Class index of interest.
+
+    Return:
+        Average circularity of all isolated instances of class c
+        in the image.
+    """
+
+    particles = (labels == c).astype(np.uint8)
+    n, particles_uniquely_labeled = cv2.connectedComponents(particles)
+
+    # If the prediction is all 1 value, circularity has no meaning
+    if n == 1:
+        return -1
+
+    props = regionprops_table(
+        particles_uniquely_labeled,
+        intensity_image=image,
+        properties=(
+            "area",
+            "perimeter",
+            "major_axis_length",
+            "minor_axis_length",
+        ),
+    )
+
+    small_particle = props["perimeter"] == 0
+    circularity = (
+        4
+        * np.pi
+        * props["area"][~small_particle]
+        / props["perimeter"][~small_particle] ** 2
+    )
+
+    return circularity.mean()
 
 
 def calculate_volume_fractions(pred_labels: np.ndarray, n_classes: int):
@@ -67,10 +110,10 @@ def calculate_connectivities(labels: np.ndarray, n_classes: int):
         n_isolated_components[c] = cv2.connectedComponents(
             (labels == c).astype(np.uint8)
         )[0]
-    result_dict = {
+    conn_dict = {
         c: 1 - n_isolated_components[c] / n_isolated_components.sum() for c in classes
     }
-    return result_dict
+    return conn_dict
 
 
 def plot_results(result_dict: dict, loss_dict: dict, slice_idx_3d: int = None):
@@ -87,7 +130,10 @@ def plot_results(result_dict: dict, loss_dict: dict, slice_idx_3d: int = None):
     yhat_custom_loss = result_dict["labels_custom_loss"]
 
     _, ax = plt.subplots(nrows=3, ncols=len(yhat_custom_loss) + 1)
-    ax[0, 0].imshow(yhat_default_loss)
+    if slice_idx_3d is None:
+        ax[0, 0].imshow(yhat_default_loss)
+    else:
+        ax[0, 0].imshow(yhat_default_loss[slice_idx_3d])
     ax[0, 0].set_title("With native loss")
 
     # Plot raw output
@@ -145,7 +191,7 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
     # Add metrics with default loss
     vfs_pred = calculate_volume_fractions(yhat_default_loss - 1, dataset.n_classes)
     conns_pred = calculate_connectivities(yhat_default_loss - 1, dataset.n_classes)
-    circs_pred = {c: np.nan for c in range(dataset.n_classes)}  # TODO
+    circs_pred = calculate_circularity(yhat_default_loss - 1, dataset.n_classes)
     kl_div = calculate_kl_div(
         np.array(list(vfs_pred.values())),
         user_input.volume_fraction_targets,
@@ -156,8 +202,7 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
             for i in range(dataset.n_classes)
         ]
     )
-    tab.add_row(["", "", f"KL div to target: {kl_div}", "", ""])
-    tab._dividers[-1] = True
+    tab.add_row(["", "", f"KL div to target: {kl_div}", "", ""], divider=True)
 
     # Add a set of rows with custom loss for each value of lambda
     for lambd in yhat_custom_loss:
@@ -167,7 +212,9 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
         conns_pred = calculate_connectivities(
             yhat_custom_loss[lambd] - 1, dataset.n_classes
         )
-        circs_pred = {c: np.nan for c in range(dataset.n_classes)}  # TODO
+        circs_pred = calculate_circularity(
+            yhat_custom_loss[lambd] - 1, dataset.n_classes
+        )
 
         kl_div = calculate_kl_div(
             np.array(list(vfs_pred.values())),
@@ -180,7 +227,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
                 for i in range(dataset.n_classes)
             ]
         )
-        tab.add_row(["", "", f"KL div to target: {kl_div}", "", ""])
-        tab._dividers[-1] = True
+        tab.add_row(["", "", f"KL div to target: {kl_div}", "", ""], divider=True)
 
-        print(tab)
+    print(tab)

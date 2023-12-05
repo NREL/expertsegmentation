@@ -29,7 +29,8 @@ class UserInputs:
             list(self.user_input_dict["volume_fraction_targets"].values())
         )
         self.connectivity_target = self.user_input_dict["connectivity_target"]
-        self.circularity_target = self.user_input_dict["circularity_target"]
+        self.circularity_target_class = self.user_input_dict["circularity_target_class"]
+        self.circularity_target_value = self.user_input_dict["circularity_target_value"]
         self.lambdas = self.user_input_dict["lambdas"]
 
 
