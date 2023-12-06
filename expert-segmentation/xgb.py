@@ -2,6 +2,7 @@
 Implementation of XGBoost with custom loss.
 """
 
+import GPUtil
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from torch import from_numpy
@@ -108,9 +109,7 @@ def connectivity_obj(
         pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
 
     connectivity = calculate_connectivities(pred_labels, n_classes=n_classes)[c]
-    loss = (
-        -1 * lambd * connectivity**2
-    )  # Negative because want to *maximize* connectivity
+    loss = -1 * lambd * connectivity**2
     grad_val = -1 * 2 * lambd * connectivity
     gradient = np.full(pred.shape, grad_val)
 
@@ -175,9 +174,16 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     Return:
         pred: Predictions on input image.
     """
+    if GPUtil.getAvailable():
+        device = "cuda"
+        print('GPU is available. Using GPU.')
+    else:
+        device = "cpu"
+        print('GPU unavailable. Using cpu.')
     params = {
         "max_depth": 2,
         "eta": 0.1,
+        "device": device,
         "objective": "multi:softprob",
         "num_class": dataset.n_classes,
     }
@@ -208,25 +214,14 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     yhat_probs_default = yhat_probs_default.reshape(
         (*dataset.raw_img_with_features.shape[:-1], dataset.n_classes)
     )
-    yhat_labels_default = (
-        np.argmax(yhat_probs_default, axis=-1) + 1
-    )  # Adding 1 to map back to original labels
+    # Add 1 to map back to original labels
+    yhat_labels_default = np.argmax(yhat_probs_default, axis=-1) + 1
 
     # Instantiate the model
     model = xgb.Booster(params, [dtrain])
 
     # Define default loss
     loss = CrossEntropyLoss()
-
-    # Get user inputs (for now one type of input at a time)
-    # volume_fraction_targets = user_input.volume_fraction_targets
-    # connectivity_target = (
-    # user_input.connectivity_target - 1
-    # )  # subtract to map to xgboost labels
-    circularity_target_class = (
-        user_input.circularity_target_class - 1
-    )  # Subtract to map to xgboost labels
-    circularity_target_value = user_input.circularity_target_value
 
     # Run model for each lambda
     softmax_losses_per_lambda = dict()
@@ -241,61 +236,58 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
         softmax_losses = []
         custom_losses = []
         for i in range(100):
-            if (i%10 == 0):
-                print("\tepoch {i}")
+            if i % 10 == 0:
+                print(f"\tepoch {i}")
             pred = model.predict(dtrain)
-            g_softmax, h_softmax = softmaxobj(
-                pred, dtrain
-            )  # ONLY FOR THE TRAINING PIXELS (the ones w a label)
 
-            pred_full_image = model.predict(dtrain_full_image)  # ENTIRE IMAGE
-            # l_vf, g_vf, h_vf = volume_fraction_obj(
-            #     pred_full_image, lambd=lambd, target_distr=volume_fraction_targets
-            # )  # VOLUME FRACTION PENALTY ON ENTIRE IMAGE
-            # l_conn, g_conn, h_conn = connectivity_obj(
-                # pred_full_image,
-                # lambd,
-                # connectivity_target,
-                # dataset.n_classes,
-                # *dataset.raw_img.shape,
-            # )  # CONNECTIVITY PENALTY ON THE ENTIRE IMAGE
-            l_circ, g_circ, h_circ = circularity_obj(
-                pred_full_image,
-                lambd,
-                circularity_target_class,
-                circularity_target_value,
-                dataset.raw_img,
-                *dataset.raw_img.shape,
-            )
+            # Softmax loss ONLY FOR THE TRAINING PIXELS (the ones w a label)
+            g_softmax, h_softmax = softmaxobj(pred, dtrain)
+
+            # Custom loss across the entire image
+            pred_full_image = model.predict(dtrain_full_image)
+
+            if user_input.objective == "volume_fraction":
+                l_custom, g_custom, h_custom = volume_fraction_obj(
+                    pred_full_image,
+                    lambd=lambd,
+                    target_distr=user_input.volume_fraction_targets,
+                )
+            elif user_input.objective == "connectivity":
+                l_custom, g_custom, h_custom = connectivity_obj(
+                    pred_full_image,
+                    lambd,
+                    user_input.connectivity_target - 1,
+                    dataset.n_classes,
+                    *dataset.raw_img.shape,
+                )
+            elif user_input.objective == "circularity":
+                l_custom, g_custom, h_custom = circularity_obj(
+                    pred_full_image,
+                    lambd,
+                    user_input.circularity_target_class - 1,
+                    user_input.circularity_target_value,
+                    dataset.raw_img,
+                    *dataset.raw_img.shape,
+                )
+            else:
+                raise ValueError(
+                    f"Objective should be one of {'volume_fraction', 'connectivity', 'circularity'}. Received {user_input.objective}"
+                )
 
             # Re-reduce to only the labeled pixels
-            # g_vf = g_vf.reshape(
-            #     (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
-            # )[dataset.labeled_img != unlabeled].flatten()
-            # g_conn = g_conn.reshape(
-            #     (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
-            # )[
-            #     dataset.labeled_img != unlabeled
-            # ].flatten()  # CONNECTIVITY PENALTY ON THE TRAINING PIXELS
-            g_circ = g_circ.reshape(
+            g_custom = g_custom.reshape(
                 (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
             )[dataset.labeled_img != unlabeled].flatten()
 
-            # Compute the actual losses and save for later
+            # Compute the actual softmax loss and save for later
             l_softmax = loss(
                 from_numpy(pred), from_numpy(dtrain.get_label().astype(np.uint8))
             )
             softmax_losses.append(l_softmax)
-            # custom_losses.append(l_vf)
-            # custom_losses.append(l_conn)
-            custom_losses.append(l_circ)
+            custom_losses.append(l_custom)
 
-            # g = g_softmax + g_vf
-            # g = g_softmax + g_conn
-            g = g_softmax + g_circ
-            # h = h_softmax + h_vf
-            # h = h_softmax + h_conn
-            h = h_softmax + h_circ
+            g = g_softmax + g_custom
+            h = h_softmax + h_custom
 
             model.boost(dtrain, g, h)
 

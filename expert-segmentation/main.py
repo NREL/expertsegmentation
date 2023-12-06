@@ -4,7 +4,7 @@ Main segmentation script.
 
 import argparse
 from data import SegDataset, UserInputs
-from metrics import plot_results, print_metrics
+from metrics import plot_results, print_metrics, save_gifs
 from xgb import run_xgboost
 
 
@@ -57,11 +57,11 @@ if __name__ == "__main__":
 
     # 3. Display results and metrics
     print_metrics(result_dict, dataset, user_input)
-    plot_results(result_dict, loss_dict)
+
+    if dataset.raw_img.ndim == 2:
+        plot_results(result_dict, loss_dict)
+    elif dataset.raw_img.ndim == 3:
+        save_gifs(result_dict, dataset)
+    
     print()
 
-    """
-    # TODO
-    - circularity/sphericity
-    - run multiple targets at a time? right now just one at a time
-    """

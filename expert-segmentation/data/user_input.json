@@ -9,6 +9,7 @@
     "connectivity_target": 1,
     "circularity_target_class": 2,
     "circularity_target_value": 0.691,
+    "objective": "connectivity",
     "lambdas": [0.5, 0.75, 1, 1.5, 3, 5],
     "filters": {
         "gaussian_smoothing": [0.3, 0.7, 1, 1.6, 3.5, 5, 10],

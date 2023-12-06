@@ -31,7 +31,18 @@ class UserInputs:
         self.connectivity_target = self.user_input_dict["connectivity_target"]
         self.circularity_target_class = self.user_input_dict["circularity_target_class"]
         self.circularity_target_value = self.user_input_dict["circularity_target_value"]
+        self.objective = self.user_input_dict["objective"]
         self.lambdas = self.user_input_dict["lambdas"]
+
+        self.check_vf()
+
+    def check_vf(self):
+        # Make sure that volume fraction targets sum to 1
+        vf_sum = self.volume_fraction_targets.sum()
+        if vf_sum != 1:
+            raise ValueError(
+                f"Volume fraction targets must sum to 1. Received targets that sum to {vf_sum}"
+            )
 
 
 class SegDataset:
@@ -56,6 +67,7 @@ class SegDataset:
                                         features are not re-computed.
         """
 
+        self.raw_img_fn = raw_img_fn
         self.raw_img = tifffile.imread(raw_img_fn)
         self.labeled_img = tifffile.imread(labeled_img_fn)
         self.filter_dict = filter_dict
@@ -63,27 +75,16 @@ class SegDataset:
         if raw_img_with_features_fn is not None:
             self.raw_img_with_features = tifffile.imread(raw_img_with_features_fn)
         else:
-            self._add_filter_features()
+            self._add_filter_features(save=True)
 
         self.n_classes = len(np.unique(self.labeled_img)) - 1  # Excluding 0
 
-    def _add_filter_features(self):
+    def _add_filter_features(self, save=False):
         """
-        Args:
-            img:                Single-channel image with shape (H, W)
-            filter_dict:        Dict of filters where keys are one or more of
-                                    {'gaussian_smoothing',
-                                    'diff_of_gaussians',
-                                    'hessian_of_gaussian_eigvals',
-                                    'laplacian_of_gaussian',
-                                    'gaussian_gradient_magnitude',
-                                    'structure_tensor_eigvals'} and values are
-                                    lists of sigmas to apply per filter
-
-        Returns:
-            Array with filters of the image stacked onto the channel dimension,
-            i.e. with shape (H, W, n_filters+1) where the first channel is the
-            original unfiltered image.
+        Take single-channel input image and return array with filters
+        of the image stacked onto the channel dimension, i.e. with shape
+        (H, W, n_filters+1) or (H, W, D, n_filters+1) where the first
+        channel is the original unfiltered image.
         """
 
         # Add a channel to the end to stack onto
@@ -178,6 +179,10 @@ class SegDataset:
                 )
 
         self.raw_img_with_features = result
+        if save:
+            tifffile.imwrite(
+                f"self.raw_img_fn.split('.')[0]_with_features.tiff", result
+            )
 
     @staticmethod
     def rescale_to_uint8(img):

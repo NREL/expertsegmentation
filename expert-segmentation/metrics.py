@@ -2,7 +2,9 @@
 Define domain metrics of interest.
 """
 
+import os
 import cv2
+import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 from prettytable import PrettyTable
@@ -52,6 +54,14 @@ def calculate_circularity(labels: np.ndarray, image: np.ndarray, c: int):
     )
 
     return circularity.mean()
+
+
+def calculate_circularities(labels, image, n_classes):
+    circs = dict()
+    classes = list(range(n_classes))
+    for c in classes:
+        circs[c] = calculate_circularity(labels, image, c)
+    return circs
 
 
 def calculate_volume_fractions(pred_labels: np.ndarray, n_classes: int):
@@ -114,6 +124,74 @@ def calculate_connectivities(labels: np.ndarray, n_classes: int):
         c: 1 - n_isolated_components[c] / n_isolated_components.sum() for c in classes
     }
     return conn_dict
+
+
+def save_gif(vol: np.ndarray, img_path: str):
+    """Plot and save a gif of a 3D volume.
+    
+    Args:
+        vol: 3D volume to make gif of
+        save_dir: Path to directory to save gif
+
+    """
+
+    if vol.ndim != 3:
+        raise ValueError(f"Expected 3D volume. Received volume with dimension {vol.ndim}")
+    
+    dim = ['x', 'y', 'z']
+
+    os.makedirs(img_path)
+    
+    # Save a png of each slice
+    for d in range(3):
+        img_path_d = '/'.join([img_path, 'dim_{}'.format(dim[d])])
+        print('img_path_d: ', img_path_d)
+        if not os.path.exists(img_path_d):
+            os.mkdir(img_path_d)
+        for i in range(vol.shape[d]):
+            plt.figure()
+            if d == 0:
+                img = vol[i, :, :]
+            elif d == 1:
+                img = vol[:, i, :]
+            elif d == 2:
+                img = vol[:, :, i]
+            plt.imshow(img)
+            plt.xticks([])
+            plt.yticks([])
+            plt.savefig(img_path_d+'/{:03d}.png'.format(i), dpi=150, bbox_inches='tight')
+            plt.close()
+        
+    for d in range(3):
+        img_path_d = '/'.join([img_path, 'dim_{}'.format(dim[d])])
+        images = []
+        for fn in os.listdir(img_path_d):
+            img = imageio.imread(os.path.join(img_path_d, fn))
+            images.append(img)
+        imageio.mimsave(os.path.join(img_path, f"dim_{dim[d]}.gif"), images)
+
+
+def save_gifs(result_dict: dict, dataset: SegDataset):
+    """
+
+    Saves gifs in each direction in folder called 'results' in the same
+    directory where the original input image is. Separate folder within
+    'results' for default loss and for each value of lambda run.
+
+    Args:
+        result_dict: Dictionary returned by run_xgboost.py
+        dataset: Dataset used to segment the volume.
+            
+    """
+
+    yhat_default_loss = result_dict["labels_default_loss"]
+    yhat_custom_loss = result_dict["labels_custom_loss"]
+
+    img_path = os.path.dirname(dataset.raw_img_fn)
+
+    save_gif(yhat_default_loss, os.path.join(img_path, "result/default"))
+    for lambd in yhat_custom_loss:
+        save_gif(yhat_custom_loss[lambd], os.path.join(img_path, f"result/lambda={lambd}"))
 
 
 def plot_results(result_dict: dict, loss_dict: dict, slice_idx_3d: int = None):
@@ -227,6 +305,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
                 for i in range(dataset.n_classes)
             ]
         )
-        tab.add_row(["", "", f"KL div to target: {kl_div}", "", ""], divider=True)
+        tab.add_row(["", "", "", f"KL div to target: {kl_div}", ""], divider=True)
 
     print(tab)
