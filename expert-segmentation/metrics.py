@@ -7,6 +7,7 @@ import cv2
 import imageio
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from prettytable import PrettyTable
 from scipy.stats import entropy
 from skimage.measure import regionprops_table
@@ -257,54 +258,80 @@ def plot_results(result_dict: dict, loss_dict: dict, slice_idx_3d: int = None):
 
 
 def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs):
+    """Compute, display, and return dataframes of domain metrics.
+
+    Args:
+        result_dict: Dictionary returned by run_xgboost()
+        dataset: Original dataset used for the segmentation
+        user_input: User input dictionary with domain knowledge targets
+
+    Return:
+        metrics_df: Dataframe with volume fraction, connectivity, and circularity
+                    for each class for prediction with default loss and for each
+                    lambda with custom loss.
+        evaluation_df: Dataframe with comparison to target for prediction with default
+                       loss and for each lambda with custom loss.
+    
+    """
 
     yhat_default_loss = result_dict["labels_default_loss"]
     yhat_custom_loss = result_dict["labels_custom_loss"]
 
-    # Initialize the table
-    tab = PrettyTable(
-        ["Lambda", "Class", "Volume Fraction", "Connectivity", "Circularity"]
-    )
-
     # Add metrics with default loss
-    vfs_pred = calculate_volume_fractions(yhat_default_loss - 1, dataset.n_classes)
-    conns_pred = calculate_connectivities(yhat_default_loss - 1, dataset.n_classes)
-    circs_pred = calculate_circularity(yhat_default_loss - 1, dataset.n_classes)
+    vfs_pred_default = calculate_volume_fractions(yhat_default_loss - 1, dataset.n_classes)
+    conns_pred_default = calculate_connectivities(yhat_default_loss - 1, dataset.n_classes)
+    circs_pred_default = calculate_circularities(yhat_default_loss - 1, dataset.n_classes)
     kl_div = calculate_kl_div(
-        np.array(list(vfs_pred.values())),
+        np.array(list(vfs_pred_default.values())),
         user_input.volume_fraction_targets,
     )
-    tab.add_rows(
-        [
-            ("N/A (Default Loss)", i + 1, vfs_pred[i], conns_pred[i], circs_pred[i])
-            for i in range(dataset.n_classes)
-        ]
-    )
-    tab.add_row(["", "", f"KL div to target: {kl_div}", "", ""], divider=True)
+    conn_perc_change = ''
+    circ_perc_change = (circs_pred_default[user_input.circularity_target_class-1] - user_input.circularity_target_value) / user_input.circularity_target_value
+
+    metrics_df = pd.DataFrame({'lambda': ['N/A (default loss)'] * dataset.n_classes+[''],
+                               'class': list(range(1, dataset.n_classes+1))+[''],
+                               'volume fraction': list(vfs_pred_default.values())+[''],
+                               'connectivity': list(conns_pred_default.values())+[''],
+                               'circularity': list(circs_pred_default.values())+['']})
+
+    evaluation_df = pd.DataFrame({'lambda': ['N/A (default loss)'],
+                                  'volume fraction: kl div to target': [kl_div],
+                                  'connectivity: % change from default': [conn_perc_change],
+                                  'circularity: % change from target': [circ_perc_change]})
 
     # Add a set of rows with custom loss for each value of lambda
     for lambd in yhat_custom_loss:
         vfs_pred = calculate_volume_fractions(
             yhat_custom_loss[lambd] - 1, dataset.n_classes
         )
-        conns_pred = calculate_connectivities(
-            yhat_custom_loss[lambd] - 1, dataset.n_classes
-        )
-        circs_pred = calculate_circularity(
-            yhat_custom_loss[lambd] - 1, dataset.n_classes
-        )
+        conns_pred = calculate_connectivities(yhat_custom_loss[lambd] - 1, dataset.n_classes)
+        circs_pred = calculate_circularities(yhat_custom_loss[lambd] - 1, dataset.n_classes)
 
         kl_div = calculate_kl_div(
             np.array(list(vfs_pred.values())),
             user_input.volume_fraction_targets,
         )
+        conn_perc_change = (conns_pred[user_input.connectivity_target-1] - conns_pred_default[user_input.connectivity_target-1]) / conns_pred_default[user_input.connectivity_target-1]
+        circ_perc_change = (circs_pred[user_input.circularity_target_class-1] - user_input.circularity_target_value) / user_input.circularity_target_value
 
-        tab.add_rows(
-            [
-                (lambd, i + 1, vfs_pred[i], conns_pred[i], circs_pred[i])
-                for i in range(dataset.n_classes)
-            ]
-        )
-        tab.add_row(["", "", "", f"KL div to target: {kl_div}", ""], divider=True)
+        temp_df = pd.DataFrame({'lambda': [lambd] * dataset.n_classes+[''],
+                               'class': list(range(1, dataset.n_classes+1))+[''],
+                               'volume fraction': list(vfs_pred.values())+[''],
+                               'connectivity': list(conns_pred.values())+[''],
+                               'circularity': list(circs_pred.values())+['']})
+        metrics_df = pd.concat([metrics_df, temp_df])
 
-    print(tab)
+        temp_df = pd.DataFrame({'lambda': [lambd],
+                                'volume fraction: kl div to target': [kl_div],
+                                'connectivity: % change from default': [conn_perc_change],
+                                'circularity: % change from target': [circ_perc_change]})
+        evaluation_df = pd.concat([evaluation_df, temp_df])
+
+    # Prettyprint tables from dataframes
+    tab = PrettyTable(list(metrics_df.columns))
+    tab.add_rows(metrics_df.values.tolist())
+    tab_eval = PrettyTable(list(evaluation_df.columns))
+    tab_eval.add_rows(evaluation_df.values.tolist())
+    print(tab, '\n', tab_eval)
+
+    return metrics_df, evaluation_df

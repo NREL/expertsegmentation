@@ -56,7 +56,7 @@ if __name__ == "__main__":
     loss_dict, result_dict = run_xgboost(dataset, user_input)
 
     # 3. Display results and metrics
-    print_metrics(result_dict, dataset, user_input)
+    metrics_df, evaluation_df = print_metrics(result_dict, dataset, user_input)
 
     if dataset.raw_img.ndim == 2:
         plot_results(result_dict, loss_dict)

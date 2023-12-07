@@ -181,7 +181,7 @@ class SegDataset:
         self.raw_img_with_features = result
         if save:
             tifffile.imwrite(
-                f"self.raw_img_fn.split('.')[0]_with_features.tiff", result
+                f"{self.raw_img_fn.split('.')[0]}_with_features.tiff", result
             )
 
     @staticmethod
