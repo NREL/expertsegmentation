@@ -62,6 +62,5 @@ if __name__ == "__main__":
         plot_results(result_dict, loss_dict)
     elif dataset.raw_img.ndim == 3:
         save_gifs(result_dict, dataset)
-    
-    print()
 
+    print()

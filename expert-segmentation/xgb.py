@@ -132,7 +132,11 @@ def circularity_obj(
 
     For every connected component of class c in the image:
 
-        circularity = 4 * pi * Area / Perimeter**2
+        circularity = feret max diameter / equivalent circle area diameter
+
+    where the feret max diameter is the longest distance between points
+    around a region’s convex hull contour, and equivalent circle area diameter
+    is the diameter of a circle with the same area as the region.
 
     loss =
         lambda * || predicted_average_circularity - target_circularity ||**2
@@ -176,10 +180,10 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     """
     if GPUtil.getAvailable():
         device = "cuda"
-        print('GPU is available. Using GPU.')
+        print("GPU is available. Using GPU.")
     else:
         device = "cpu"
-        print('GPU unavailable. Using cpu.')
+        print("GPU unavailable. Using cpu.")
     params = {
         "max_depth": 2,
         "eta": 0.1,
