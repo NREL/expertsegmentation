@@ -4,6 +4,8 @@ Implementation of XGBoost with custom loss.
 
 import GPUtil
 import numpy as np
+from scipy.ndimage import distance_transform_edt
+from skimage import measure
 from sklearn.preprocessing import OneHotEncoder
 from torch import from_numpy
 from torch.nn import CrossEntropyLoss
@@ -77,6 +79,65 @@ def volume_fraction_obj(pred, lambd, target_distr):
     grad_row = 2 * lambd * (pred_distr - target_distr)
     grad = np.array([grad_row] * len(pred))
     return loss, grad.flatten(), 0
+
+
+def connectivity_obj_new(
+    pred: np.ndarray, lambd: int, c: int, n_classes: int, H: int, W: int, D: int = None
+):
+    """
+
+    GOAL: MAXIMUM NUMBER OF COMPONENTS FOR SOLID PHASE
+    
+    Loss (L) = lambd * 1 / number_of_components
+
+    Gradient = distance_map(1 --> 0) * L
+
+
+    Args:
+        pred: Predicted probabilities per pixel (n_pixels, n_classes)
+        lambd: Lambda to weight connectivity loss term
+        c: The class of interest
+        n_classes: Number of unique labeled classes in the dataset
+        H: Height of original input image
+        W: Width of original input image
+        D: Depth of original input image, if 3D, else None
+    
+    """
+    if D is None:
+        pred_labels = np.argmax(pred, axis=1).reshape((H, W)).astype(np.uint8)
+    else:
+        pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
+
+    # Binarize the image
+    binary = (pred_labels == c).astype(np.uint8)
+
+    # Get the number of components
+    _, n_isolated_components = measure.label(binary, return_num=True)
+
+    # Loss
+    # If there are more components, the loss is smaller.
+    loss = lambd * 1/n_isolated_components
+
+    # Gradient
+    # If the prediction is all one value, distance map doesn't make sense
+    if len(np.unique(binary)) <= 1:
+        gradient = np.zeros((*pred_labels.shape, n_classes))
+
+    else:
+        eps = 1e-6
+        distance_map_inv = 1 / (distance_transform_edt(binary) + eps)
+        
+        # So the gradient is large at the boundaries and small inside the particles
+        gradient = lambd * distance_map_inv * loss
+
+        # Per-class gradient - let the gradient be negative at the target phase and
+        # positive at the other phase(s)
+        gradient = np.stack([gradient] * n_classes)
+        gradient[c] *= -1
+        gradient = np.moveaxis(gradient, 0, -1)
+
+    return loss, gradient.flatten(), 0
+
 
 
 def connectivity_obj(
@@ -257,13 +318,20 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
                     target_distr=user_input.volume_fraction_targets,
                 )
             elif user_input.objective == "connectivity":
-                l_custom, g_custom, h_custom = connectivity_obj(
+                l_custom, g_custom, h_custom = connectivity_obj_new(
                     pred_full_image,
                     lambd,
                     user_input.connectivity_target - 1,
                     dataset.n_classes,
                     *dataset.raw_img.shape,
                 )
+                # l_custom, g_custom, h_custom = connectivity_obj(
+                #     pred_full_image,
+                #     lambd,
+                #     user_input.connectivity_target - 1,
+                #     dataset.n_classes,
+                #     *dataset.raw_img.shape,
+                # )
             elif user_input.objective == "circularity":
                 l_custom, g_custom, h_custom = circularity_obj(
                     pred_full_image,

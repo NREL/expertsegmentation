@@ -13,6 +13,7 @@ from structure_tensor import (
     structure_tensor_3d,
 )
 import tifffile
+from typing import Union
 
 
 def load_json(fn):
@@ -51,7 +52,7 @@ class SegDataset:
         raw_img_fn: str,
         labeled_img_fn: str,
         filter_dict: dict,
-        raw_img_with_features_fn: [str, None],
+        raw_img_with_features_fn: Union[str, None],
     ):
         """
         Class responsible for organizing and preprocessing data.
