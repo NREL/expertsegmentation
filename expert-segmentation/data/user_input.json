@@ -10,10 +10,10 @@
     "circularity_target_value": 0.691,
 
     "objective": "connectivity",
-    "connectivity_target": 3,
-    "connectivity_direction": "max",
+    "connectivity_target": 1,
+    "connectivity_direction": "min",
 
-    "lambdas": [0.01, 0.03, 0.05, 0.075, 0.1],
+    "lambdas": [0.1, 0.5],
     "filters": {
         "gaussian_smoothing": [0.3, 0.7, 1, 1.6, 3.5, 5, 10],
         "laplacian_of_gaussian": [0.7, 1, 1.6, 3.5, 5, 10],

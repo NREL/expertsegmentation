@@ -156,43 +156,6 @@ def connectivity_obj(
     return loss, gradient.flatten(), 0
 
 
-def connectivity_obj(
-    pred: np.ndarray, lambd: int, c: int, n_classes: int, H: int, W: int, D: int = None
-):
-    """
-    Define "connectivity" loss term to penalize the connectivity of
-    a particular class. i.e. the "blue" class (carbon binder) should
-    be highly connected.
-
-    Args:
-        pred: Predicted probabilities per pixel (n_pixels, n_classes)
-        lambd: Lambda to weight connectivity loss term
-        c: The class of interest
-        n_classes: Number of unique labeled classes in the dataset
-        H: Height of original input image
-        W: Width of original input image
-        D: Depth of original input image, if 3D, else None
-
-    loss =
-        lambda * || 1 - n_components in class 0 / total n_components || **2
-
-    gradient =
-        2 * lambda * || 1 - n_components in class 0 / total n_components ||
-
-    """
-    if D is None:
-        pred_labels = np.argmax(pred, axis=1).reshape((H, W)).astype(np.uint8)
-    else:
-        pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
-
-    connectivity = calculate_connectivities(pred_labels, n_classes=n_classes)[c]
-    loss = -1 * lambd * connectivity**2
-    grad_val = -1 * 2 * lambd * connectivity
-    gradient = np.full(pred.shape, grad_val)
-
-    return loss, gradient.flatten(), 0
-
-
 def circularity_obj(
     pred: np.ndarray,
     lambd: int,
