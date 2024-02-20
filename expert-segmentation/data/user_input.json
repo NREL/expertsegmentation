@@ -6,11 +6,14 @@
         "4": 0.030925,
         "5": 0.056443
     },
-    "connectivity_target": 1,
     "circularity_target_class": 2,
     "circularity_target_value": 0.691,
+
     "objective": "connectivity",
-    "lambdas": [0.5, 0.75, 1, 1.5, 3, 5],
+    "connectivity_target": 3,
+    "connectivity_direction": "max",
+
+    "lambdas": [0.01, 0.03, 0.05, 0.075, 0.1],
     "filters": {
         "gaussian_smoothing": [0.3, 0.7, 1, 1.6, 3.5, 5, 10],
         "laplacian_of_gaussian": [0.7, 1, 1.6, 3.5, 5, 10],

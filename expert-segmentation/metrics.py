@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from prettytable import PrettyTable
 from scipy.stats import entropy
+import seaborn as sns
 from skimage.measure import label, regionprops_table
 from skimage.morphology import remove_small_objects
 
@@ -203,6 +204,89 @@ def save_gifs(result_dict: dict, dataset: SegDataset):
         save_gif(
             yhat_custom_loss[lambd], os.path.join(img_path, f"result/lambda={lambd}")
         )
+
+
+def plot_loss_curve(loss_dict, lambd, plot_type = 'all'):
+
+    plot_types = {'all', 'total_only', 'custom_only', 'softmax_only'}
+    if plot_type not in plot_types:
+        raise ValueError(f"`plot_type` must be one of {plot_types}. Received {plot_type}.")
+
+
+    loss_list = np.array(loss_dict['custom_losses_only'][lambd]) + np.array(loss_dict['softmax_losses_only'][lambd])
+    sns.set_context("paper", font_scale = 2)
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    if plot_type == 'total_only':
+        sns.lineplot(x = list(range(len(loss_list))),
+                    y = loss_list,
+                    ax = ax,
+                    marker='o')
+        ax.set(ylabel='Total loss')
+
+    elif plot_type == 'softmax_only':
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['softmax_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        ax.set(ylabel='Softmax loss')
+
+    elif plot_type == 'custom_only':
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['custom_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        ax.set(ylabel='Custom loss')
+
+    elif plot_type == 'all':
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = loss_list,
+            ax = ax,
+            marker='o')
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['custom_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['softmax_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        ax.legend(['Total loss', 'Volume fraction loss', 'Softmax loss'])
+        ax.set(ylabel='Loss')
+    ax.set(xlabel='Epochs')
+    plt.show()
+
+
+def plot_steps_3d_slice(step_dict: dict,
+                      result_dict: dict,
+                      lambd: float,
+                      dataset,
+                      steps: list[int] = None,
+                      slice_idx: int = 0,
+                    ):
+    
+    if steps is None:
+        steps = list(step_dict.keys())
+
+    fig, axes = plt.subplots(len(steps), 3)
+    for i, epoch in enumerate(steps):
+        pred_labels = step_dict[lambd][epoch]['prediction'].argmax(axis=-1) + 1
+        axes[i, 0].imshow(dataset.raw_img[slice_idx], cmap='gray')
+        axes[i, 1].imshow(pred_labels[slice_idx], cmap='gray_r')
+        diff = pred_labels != result_dict['labels_default_loss']
+        axes[i, 2].imshow(diff[slice_idx], cmap='Reds')
+        for j in range(3):
+            axes[i, j].tick_params(left = False, right = False , labelleft = False , 
+                        labelbottom = False, bottom = False)
+            axes[i, j].set_frame_on(False) 
+
+    row_labels = ['Epoch {}'.format(epoch) for epoch in steps]
+    for ax, row in zip(axes[:,0], row_labels):
+        ax.set_ylabel(row, rotation='vertical', size='xx-small')
+
+    fig.tight_layout()
+    plt.subplots_adjust(wspace=0)
+    plt.show()
 
 
 def plot_results(result_dict: dict, loss_dict: dict, slice_idx_3d: int = None):

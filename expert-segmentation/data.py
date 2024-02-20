@@ -29,6 +29,7 @@ class UserInputs:
         self.volume_fraction_targets = np.array(
             list(self.user_input_dict["volume_fraction_targets"].values())
         )
+        self.connectivity_direction = self.user_input_dict["connectivity_direction"]
         self.connectivity_target = self.user_input_dict["connectivity_target"]
         self.circularity_target_class = self.user_input_dict["circularity_target_class"]
         self.circularity_target_value = self.user_input_dict["circularity_target_value"]

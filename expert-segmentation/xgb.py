@@ -81,16 +81,20 @@ def volume_fraction_obj(pred, lambd, target_distr):
     return loss, grad.flatten(), 0
 
 
-def connectivity_obj_new(
-    pred: np.ndarray, lambd: int, c: int, n_classes: int, H: int, W: int, D: int = None
+def connectivity_obj(
+    pred: np.ndarray, lambd: int, c: int, n_classes: int, H: int, W: int, D: int = None, direction: str = "max",
 ):
     """
-
-    GOAL: MAXIMUM NUMBER OF COMPONENTS FOR SOLID PHASE
     
-    Loss (L) = lambd * 1 / number_of_components
+    If minimizing connectivity:
+        Loss (L) = lambd * 1 / number_of_components
+        i.e. loss is minimized when there are a greater number of isolated components
+    
+    If maximizing connectivity:
+        Loss (L) = lambd * log(number_of_components)
+        i.e. loss is minimized when there are a smaller number of isolated components
 
-    Gradient = distance_map(1 --> 0) * L
+    Gradient = lambd * 1/distance_map(1 --> 0) * L
 
 
     Args:
@@ -101,6 +105,8 @@ def connectivity_obj_new(
         H: Height of original input image
         W: Width of original input image
         D: Depth of original input image, if 3D, else None
+        direction: One of {"max", "min"}. Whether to maximize or minimize connectivity
+                   of the target phase.
     
     """
     if D is None:
@@ -114,30 +120,40 @@ def connectivity_obj_new(
     # Get the number of components
     _, n_isolated_components = measure.label(binary, return_num=True)
 
-    # Loss
-    # If there are more components, the loss is smaller.
-    loss = lambd * 1/n_isolated_components
-
-    # Gradient
-    # If the prediction is all one value, distance map doesn't make sense
+    # If the prediction is all one value, distance map doesn't make sense.
+    # Defer to softmax loss and set this loss term to 0
     if len(np.unique(binary)) <= 1:
+        loss = 0
         gradient = np.zeros((*pred_labels.shape, n_classes))
 
     else:
-        eps = 1e-6
-        distance_map_inv = 1 / (distance_transform_edt(binary) + eps)
+
+        # Loss
+        if direction == "min":
+            # Min connectivity = maximize number of isolated components
+            # If there are more components, the loss is smaller.
+            loss = lambd * 1 / n_isolated_components
         
+        else:
+            # Max connectivity = minimize number of isolated components
+            loss = lambd * np.log(n_isolated_components)  # exp? log?
+
+        # Gradient
+        distance_map = distance_transform_edt(binary)
+        # Division by 0 --> 0
+        distance_map_inv = np.divide(
+            1, distance_map, out=np.zeros(distance_map.shape), where=distance_map != 0
+        )
+
         # So the gradient is large at the boundaries and small inside the particles
         gradient = lambd * distance_map_inv * loss
 
-        # Per-class gradient - let the gradient be negative at the target phase and
-        # positive at the other phase(s)
-        gradient = np.stack([gradient] * n_classes)
+        # Per-class gradient
+        gradient = -1 * np.stack([gradient] * n_classes)
         gradient[c] *= -1
         gradient = np.moveaxis(gradient, 0, -1)
 
     return loss, gradient.flatten(), 0
-
 
 
 def connectivity_obj(
@@ -230,7 +246,7 @@ def circularity_obj(
     return loss, gradient.flatten(), 0
 
 
-def run_xgboost(dataset: SegDataset, user_input: UserInputs):
+def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[int] = [5, 25, 50, 75, 95]):
     """Main function to fit XGBoost model and make predictions.
 
     Args:
@@ -293,6 +309,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     custom_losses_per_lambda = dict()
     yhat_probabilities_per_lambda = dict()
     yhat_labels_per_lambda = dict()
+    step_dict = dict()
     for lambd in user_input.lambdas:
 
         print(f"Evaluating for lambda = {lambd}...")
@@ -300,6 +317,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
         # Run training and save losses (100 epochs)
         softmax_losses = []
         custom_losses = []
+        step_predictions = dict()
         for i in range(100):
             if i % 10 == 0:
                 print(f"\tepoch {i}")
@@ -318,20 +336,14 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
                     target_distr=user_input.volume_fraction_targets,
                 )
             elif user_input.objective == "connectivity":
-                l_custom, g_custom, h_custom = connectivity_obj_new(
+                l_custom, g_custom, h_custom = connectivity_obj(
                     pred_full_image,
                     lambd,
                     user_input.connectivity_target - 1,
                     dataset.n_classes,
                     *dataset.raw_img.shape,
+                    user_input.connectivity_direction,
                 )
-                # l_custom, g_custom, h_custom = connectivity_obj(
-                #     pred_full_image,
-                #     lambd,
-                #     user_input.connectivity_target - 1,
-                #     dataset.n_classes,
-                #     *dataset.raw_img.shape,
-                # )
             elif user_input.objective == "circularity":
                 l_custom, g_custom, h_custom = circularity_obj(
                     pred_full_image,
@@ -347,6 +359,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
                 )
 
             # Re-reduce to only the labeled pixels
+            g_custom_before_reshape = g_custom
             g_custom = g_custom.reshape(
                 (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
             )[dataset.labeled_img != unlabeled].flatten()
@@ -363,6 +376,15 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
 
             model.boost(dtrain, g, h)
 
+            # Save intermediate steps
+            if i in save_steps:
+                step_predictions[i] = {'prediction': pred_full_image.reshape((*dataset.raw_img_with_features.shape[:-1], dataset.n_classes)),
+                                       'l_softmax': l_softmax,
+                                       'l_custom': l_custom,
+                                       'g_softmax': g_softmax,
+                                       'g_custom': g_custom_before_reshape,
+                }
+
         # Evaluate
         yhat_probs = model.predict(dtest).reshape(
             (*dataset.raw_img_with_features.shape[:-1], dataset.n_classes)
@@ -375,6 +397,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
         custom_losses_per_lambda[lambd] = custom_losses
         yhat_probabilities_per_lambda[lambd] = yhat_probs
         yhat_labels_per_lambda[lambd] = yhat_labels
+        step_dict[lambd] = step_predictions
 
     loss_dict = {
         "softmax_losses_only": softmax_losses_per_lambda,
@@ -390,4 +413,5 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     return (
         loss_dict,
         result_dict,
+        step_dict,
     )
