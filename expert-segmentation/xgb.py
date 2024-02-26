@@ -14,6 +14,7 @@ from metrics import (
     calculate_volume_fractions,
     calculate_connectivities,
     calculate_circularity,
+    calculate_kl_div,
 )
 
 
@@ -169,11 +170,13 @@ def circularity_obj(
     return loss, gradient.flatten(), 0
 
 
-def run_xgboost(dataset: SegDataset, user_input: UserInputs):
+def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[int] = [5, 25, 50, 75, 95]):
     """Main function to fit XGBoost model and make predictions.
 
     Args:
         dataset: Object with raw input and labeled image.
+        user_input: UserInputs argument specifying targets.
+        save_steps: List of epoch integers to save intermediate output for.
 
     Return:
         pred: Predictions on input image.
@@ -232,6 +235,8 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     custom_losses_per_lambda = dict()
     yhat_probabilities_per_lambda = dict()
     yhat_labels_per_lambda = dict()
+    step_dict = dict()
+    kl_divs_per_lambda = dict()
     for lambd in user_input.lambdas:
 
         print(f"Evaluating for lambda = {lambd}...")
@@ -239,6 +244,8 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
         # Run training and save losses (100 epochs)
         softmax_losses = []
         custom_losses = []
+        step_predictions = dict()
+        kl_divs = []
         for i in range(100):
             if i % 10 == 0:
                 print(f"\tepoch {i}")
@@ -256,6 +263,15 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
                     lambd=lambd,
                     target_distr=user_input.volume_fraction_targets,
                 )
+                vfs_pred = calculate_volume_fractions(
+                    pred_full_image.reshape((*dataset.raw_img_with_features.shape[:-1], dataset.n_classes)).argmax(axis=-1) - 1,
+                    dataset.n_classes
+                )
+                kl_div = calculate_kl_div(
+                    np.array(list(vfs_pred.values())),
+                    user_input.volume_fraction_targets,
+                )
+                kl_divs.append(kl_div)
             elif user_input.objective == "connectivity":
                 l_custom, g_custom, h_custom = connectivity_obj(
                     pred_full_image,
@@ -279,6 +295,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
                 )
 
             # Re-reduce to only the labeled pixels
+            g_custom_before_reshape = g_custom
             g_custom = g_custom.reshape(
                 (*dataset.raw_img_with_features.shape[:-1], pred.shape[-1])
             )[dataset.labeled_img != unlabeled].flatten()
@@ -295,6 +312,15 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
 
             model.boost(dtrain, g, h)
 
+            # Save intermediate steps
+            if i in save_steps:
+                step_predictions[i] = {'prediction': pred_full_image.reshape((*dataset.raw_img_with_features.shape[:-1], dataset.n_classes)),
+                                       'l_softmax': l_softmax,
+                                       'l_custom': l_custom,
+                                       'g_softmax': g_softmax,
+                                       'g_custom': g_custom_before_reshape,
+                }
+
         # Evaluate
         yhat_probs = model.predict(dtest).reshape(
             (*dataset.raw_img_with_features.shape[:-1], dataset.n_classes)
@@ -307,6 +333,8 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
         custom_losses_per_lambda[lambd] = custom_losses
         yhat_probabilities_per_lambda[lambd] = yhat_probs
         yhat_labels_per_lambda[lambd] = yhat_labels
+        step_dict[lambd] = step_predictions
+        kl_divs_per_lambda[lambd] = kl_divs
 
     loss_dict = {
         "softmax_losses_only": softmax_losses_per_lambda,
@@ -322,4 +350,6 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs):
     return (
         loss_dict,
         result_dict,
+        step_dict,
+        kl_divs_per_lambda,
     )

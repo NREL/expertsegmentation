@@ -4,7 +4,7 @@ Main segmentation script.
 
 import argparse
 from data import SegDataset, UserInputs
-from metrics import plot_results, print_metrics, save_gifs
+from metrics import *
 from xgb import run_xgboost
 
 
