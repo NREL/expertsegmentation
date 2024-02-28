@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from prettytable import PrettyTable
 from scipy.stats import entropy
+import seaborn as sns
 from skimage.measure import label, regionprops_table
 from skimage.morphology import remove_small_objects
 
@@ -97,38 +98,23 @@ def calculate_kl_div(distr1: np.ndarray, distr2: np.ndarray):
     return entropy(distr1, distr2)
 
 
-def calculate_connectivities(labels: np.ndarray, n_classes: int):
+def calculate_n_components(labels: np.ndarray, target_class: int):
     """Calculate connectivity of a segmented image for each unique class.
 
     Define connectivity as (1 - normalized number of isolated components).
     Assumes that the labels go from 0 to n_classes - 1.
 
     Args:
-        labels:     Segmented image with integer type.
-        n_classes:  Number of unique classes in the dataset
+        labels:        Segmented image with integer type.
+        target_class:  Label for the target class
 
     Return:
-        result_dict:    Dictionary with connectivity value per class.
+        n_isolated_components: Number of isolated, non-touching components
     """
-    classes = list(range(n_classes))
 
-    # Array of number of isolated components per class
-    n_isolated_components = np.zeros(n_classes)
-    for c in classes:
-        if labels.ndim == 2:
-            n_isolated_components[c] = cv2.connectedComponents(
-                (labels == c).astype(np.uint8)
-            )[0]
-        elif labels.ndim == 3:
-            _, n_isolated_components[c] = label(
-                (labels == c).astype(np.uint8), return_num=True
-            )
-    conn_dict = {
-        c: 1 - n_isolated_components[c] / n_isolated_components.sum()
-        for c in classes
-        # c: np.log(n_isolated_components[c]) for c in classes
-    }
-    return conn_dict
+    binary = (labels == target_class).astype(np.uint8)
+    _, n_isolated_components = label(binary, return_num=True)
+    return n_isolated_components
 
 
 def save_gif(vol: np.ndarray, img_path: str):
@@ -203,6 +189,89 @@ def save_gifs(result_dict: dict, dataset: SegDataset):
         save_gif(
             yhat_custom_loss[lambd], os.path.join(img_path, f"result/lambda={lambd}")
         )
+
+
+def plot_loss_curve(loss_dict, lambd, plot_type = 'all'):
+
+    plot_types = {'all', 'total_only', 'custom_only', 'softmax_only'}
+    if plot_type not in plot_types:
+        raise ValueError(f"`plot_type` must be one of {plot_types}. Received {plot_type}.")
+
+
+    loss_list = np.array(loss_dict['custom_losses_only'][lambd]) + np.array(loss_dict['softmax_losses_only'][lambd])
+    sns.set_context("paper", font_scale = 2)
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    if plot_type == 'total_only':
+        sns.lineplot(x = list(range(len(loss_list))),
+                    y = loss_list,
+                    ax = ax,
+                    marker='o')
+        ax.set(ylabel='Total loss')
+
+    elif plot_type == 'softmax_only':
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['softmax_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        ax.set(ylabel='Softmax loss')
+
+    elif plot_type == 'custom_only':
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['custom_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        ax.set(ylabel='Custom loss')
+
+    elif plot_type == 'all':
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = loss_list,
+            ax = ax,
+            marker='o')
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['custom_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        sns.lineplot(x = list(range(len(loss_list))),
+            y = np.array(loss_dict['softmax_losses_only'][lambd]),
+            ax = ax,
+            marker='o')
+        ax.legend(['Total loss', 'Volume fraction loss', 'Softmax loss'])
+        ax.set(ylabel='Loss')
+    ax.set(xlabel='Epochs')
+    plt.show()
+
+
+def plot_steps_3d_slice(step_dict: dict,
+                      result_dict: dict,
+                      lambd: float,
+                      dataset,
+                      steps: list[int] = None,
+                      slice_idx: int = 0,
+                    ):
+    
+    if steps is None:
+        steps = list(step_dict.keys())
+
+    fig, axes = plt.subplots(len(steps), 3)
+    for i, epoch in enumerate(steps):
+        pred_labels = step_dict[lambd][epoch]['prediction'].argmax(axis=-1) + 1
+        axes[i, 0].imshow(dataset.raw_img[slice_idx], cmap='gray')
+        axes[i, 1].imshow(pred_labels[slice_idx], cmap='gray_r')
+        diff = pred_labels != result_dict['labels_default_loss']
+        axes[i, 2].imshow(diff[slice_idx], cmap='Reds')
+        for j in range(3):
+            axes[i, j].tick_params(left = False, right = False , labelleft = False , 
+                        labelbottom = False, bottom = False)
+            axes[i, j].set_frame_on(False) 
+
+    row_labels = ['Epoch {}'.format(epoch) for epoch in steps]
+    for ax, row in zip(axes[:,0], row_labels):
+        ax.set_ylabel(row, rotation='vertical', size='xx-small')
+
+    fig.tight_layout()
+    plt.subplots_adjust(wspace=0)
+    plt.show()
 
 
 def plot_results(result_dict: dict, loss_dict: dict, slice_idx_3d: int = None):
@@ -291,9 +360,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
     vfs_pred_default = calculate_volume_fractions(
         yhat_default_loss - 1, dataset.n_classes
     )
-    conns_pred_default = calculate_connectivities(
-        yhat_default_loss - 1, dataset.n_classes
-    )
     circs_pred_default = calculate_circularities(
         yhat_default_loss - 1, dataset.n_classes
     )
@@ -301,7 +367,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
         np.array(list(vfs_pred_default.values())),
         user_input.volume_fraction_targets,
     )
-    conn_perc_change = ""
     circ_perc_change = (
         circs_pred_default[user_input.circularity_target_class - 1]
         - user_input.circularity_target_value
@@ -312,7 +377,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
             "lambda": ["N/A (default loss)"] * dataset.n_classes + [""],
             "class": list(range(1, dataset.n_classes + 1)) + [""],
             "volume fraction": list(vfs_pred_default.values()) + [""],
-            "connectivity": list(conns_pred_default.values()) + [""],
             "circularity": list(circs_pred_default.values()) + [""],
         }
     )
@@ -321,7 +385,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
         {
             "lambda": ["N/A (default loss)"],
             "volume fraction: kl div to target": [kl_div],
-            "connectivity: % change from default": [conn_perc_change],
             "circularity: % change from target": [circ_perc_change],
         }
     )
@@ -329,9 +392,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
     # Add a set of rows with custom loss for each value of lambda
     for lambd in yhat_custom_loss:
         vfs_pred = calculate_volume_fractions(
-            yhat_custom_loss[lambd] - 1, dataset.n_classes
-        )
-        conns_pred = calculate_connectivities(
             yhat_custom_loss[lambd] - 1, dataset.n_classes
         )
         circs_pred = calculate_circularities(
@@ -342,10 +402,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
             np.array(list(vfs_pred.values())),
             user_input.volume_fraction_targets,
         )
-        conn_perc_change = (
-            conns_pred[user_input.connectivity_target - 1]
-            - conns_pred_default[user_input.connectivity_target - 1]
-        ) / conns_pred_default[user_input.connectivity_target - 1]
         circ_perc_change = (
             circs_pred[user_input.circularity_target_class - 1]
             - user_input.circularity_target_value
@@ -356,7 +412,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
                 "lambda": [lambd] * dataset.n_classes + [""],
                 "class": list(range(1, dataset.n_classes + 1)) + [""],
                 "volume fraction": list(vfs_pred.values()) + [""],
-                "connectivity": list(conns_pred.values()) + [""],
                 "circularity": list(circs_pred.values()) + [""],
             }
         )
@@ -366,7 +421,6 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
             {
                 "lambda": [lambd],
                 "volume fraction: kl div to target": [kl_div],
-                "connectivity: % change from default": [conn_perc_change],
                 "circularity: % change from target": [circ_perc_change],
             }
         )

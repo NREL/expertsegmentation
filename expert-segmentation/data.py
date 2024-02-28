@@ -26,16 +26,35 @@ class UserInputs:
     def __init__(self, user_input_fn):
         self.user_input_dict = load_json(user_input_fn)
         self.filters = self.user_input_dict["filters"]
-        self.volume_fraction_targets = np.array(
-            list(self.user_input_dict["volume_fraction_targets"].values())
-        )
-        self.connectivity_target = self.user_input_dict["connectivity_target"]
-        self.circularity_target_class = self.user_input_dict["circularity_target_class"]
-        self.circularity_target_value = self.user_input_dict["circularity_target_value"]
         self.objective = self.user_input_dict["objective"]
         self.lambdas = self.user_input_dict["lambdas"]
 
-        self.check_vf()
+        self.check_lambdas()
+        
+        if "connectivity" in self.objective:
+            self.connectivity_direction = self.user_input_dict["connectivity_direction"]
+            self.connectivity_target = self.user_input_dict["connectivity_target"]
+
+        if "circularity" in self.objective:
+            self.circularity_target_class = self.user_input_dict["circularity_target_class"]
+            self.circularity_target_value = self.user_input_dict["circularity_target_value"]
+
+        if "volume_fraction" in self.objective:
+            self.volume_fraction_targets = np.array(
+                list(self.user_input_dict["volume_fraction_targets"].values())
+            )
+            self.check_vf()
+
+    def check_lambdas(self):
+        # Make sure that the lambdas match the objectives and
+        # have the same length
+        for obj in self.objective:
+            if obj not in self.lambdas:
+                raise ValueError(f"{obj} specified as an objective but no lambda provided.")
+        n_lambdas = [len(self.lambdas[obj]) for obj in self.lambdas]
+        if len(set(n_lambdas)) != 1:
+            raise ValueError(f"Must provided equal number of lambdas per objective.")
+        self.n_lambdas = n_lambdas[0]       
 
     def check_vf(self):
         # Make sure that volume fraction targets sum to 1

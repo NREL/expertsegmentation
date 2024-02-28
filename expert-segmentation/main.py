@@ -53,7 +53,7 @@ if __name__ == "__main__":
     )
 
     # 2. Run segmentation with targets
-    loss_dict, result_dict = run_xgboost(dataset, user_input)
+    loss_dict, result_dict, step_dict = run_xgboost(dataset, user_input, save_steps=[25, 40, 55, 75, 95])
 
     # 3. Display results and metrics
     metrics_df, evaluation_df = print_metrics(result_dict, dataset, user_input)
