@@ -24,14 +24,9 @@ $ conda activate expert-seg
 
 2. In data/user_input.json, set the domain targets and the parameters for input feature transformations.
 
-        'Volume fraction targets' is a dictionary where the keys are class labels and values are the target fraction per class.
-        'Connectivity target' refers to the class label to maximize connectivity on.
-        'Circularity target' refers to the class label to maximize circularity on.
-        'Objective' should be one of {'volume_fraction', 'connectivity', 'circularity'}. For now, can only optimize on one target at a time.
 
-
-3. Run the following command in the terminal:
+3. Run the following command:
 
 ```
-$ python expert-segmentation/main.py -i <path to raw input image> -l <path to labeled input image>
+(expert-seg) $ python expert-segmentation/main.py -i <path to raw input image> -l <path to labeled input image>
 ```

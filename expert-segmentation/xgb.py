@@ -4,6 +4,7 @@ Implementation of XGBoost with custom loss.
 
 import GPUtil
 import numpy as np
+import porespy as ps
 from scipy.ndimage import distance_transform_edt
 from skimage import measure
 from sklearn.preprocessing import OneHotEncoder
@@ -14,7 +15,6 @@ import xgboost as xgb
 from data import SegDataset, UserInputs
 from metrics import (
     calculate_volume_fractions,
-    calculate_connectivities,
     calculate_circularity,
 )
 
@@ -94,9 +94,6 @@ def connectivity_obj(
         Loss (L) = lambd * log(number_of_components)
         i.e. loss is minimized when there are a smaller number of isolated components
 
-    Gradient = lambd * 1/distance_map(1 --> 0) * L
-
-
     Args:
         pred: Predicted probabilities per pixel (n_pixels, n_classes)
         lambd: Lambda to weight connectivity loss term
@@ -118,7 +115,7 @@ def connectivity_obj(
     binary = (pred_labels == c).astype(np.uint8)
 
     # Get the number of components
-    _, n_isolated_components = measure.label(binary, return_num=True)
+    particles_uniquely_labeled, n_isolated_components = measure.label(binary, return_num=True)
 
     # If the prediction is all one value, distance map doesn't make sense.
     # Defer to softmax loss and set this loss term to 0
@@ -131,22 +128,53 @@ def connectivity_obj(
         # Loss
         if direction == "min":
             # Min connectivity = maximize number of isolated components
-            # If there are more components, the loss is smaller.
             loss = lambd * 1 / n_isolated_components
+
+            # Gradient
+            distance_map = distance_transform_edt(binary)
+            # Division by 0 --> 0
+            distance_map_inv = np.divide(
+                1, distance_map, out=np.zeros(distance_map.shape), where=distance_map != 0
+            )
+
+            # Gradient is largest at particle boundaries and smallest within particles
+            gradient = lambd * distance_map_inv * loss
         
         else:
             # Max connectivity = minimize number of isolated components
-            loss = lambd * np.log(n_isolated_components)  # exp? log?
+            loss = lambd * np.log(n_isolated_components)
 
-        # Gradient
-        distance_map = distance_transform_edt(binary)
-        # Division by 0 --> 0
-        distance_map_inv = np.divide(
-            1, distance_map, out=np.zeros(distance_map.shape), where=distance_map != 0
-        )
+            ## Gradient term 1: towards deletion of noisy non-target pixels ##
+            # (Normalized) particle area of each component
+            area_map = particles_uniquely_labeled
+            props = ps.metrics.regionprops_3D(particles_uniquely_labeled)
+            areas = [prop.area for prop in props]
+            max_area = np.max(areas)
+            for prop in props:
+                area_map[area_map == prop.label] = prop.area / max_area
+            gradient_area = lambd * area_map * loss
 
-        # So the gradient is large at the boundaries and small inside the particles
-        gradient = lambd * distance_map_inv * loss
+
+            ## Gradient term 2: towards growth of target pixels at boundaries ##
+            # Flip the binarized image so that the distance map
+            # is the distance from non-particle to particle
+            binary_inverse = 1 - binary
+            
+            # Distance map is largest far from particles, smallest
+            # near particle boundaries, and 0 inside particles
+            distance_map = distance_transform_edt(binary_inverse)
+
+            # Invert the distance map to be largest close to particles,
+            # smallest far from particles, and 0 inside particles.
+            # Division by 0 --> 0
+            distance_map_inv = np.divide(
+                1, distance_map, out=np.zeros(distance_map.shape), where=distance_map != 0
+            )
+            gradient_distancemap = lambd * distance_map_inv * loss
+
+            # Combine the two gradient terms
+            gradient = gradient_area + gradient_distancemap
+
 
         # Per-class gradient
         gradient = -1 * np.stack([gradient] * n_classes)
@@ -268,14 +296,16 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[in
     loss = CrossEntropyLoss()
 
     # Run model for each lambda
+    lambdas = user_input.lambdas
     softmax_losses_per_lambda = dict()
     custom_losses_per_lambda = dict()
     yhat_probabilities_per_lambda = dict()
     yhat_labels_per_lambda = dict()
     step_dict = dict()
-    for lambd in user_input.lambdas:
 
-        print(f"Evaluating for lambda = {lambd}...")
+    for l in range(user_input.n_lambdas):
+
+        print("Evaluating for lambdas: {}".format({key: lambdas[key][l] for key in user_input.objective}))
 
         # Run training and save losses (100 epochs)
         softmax_losses = []
@@ -292,34 +322,45 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[in
             # Custom loss across the entire image
             pred_full_image = model.predict(dtrain_full_image)
 
-            if user_input.objective == "volume_fraction":
-                l_custom, g_custom, h_custom = volume_fraction_obj(
-                    pred_full_image,
-                    lambd=lambd,
-                    target_distr=user_input.volume_fraction_targets,
-                )
-            elif user_input.objective == "connectivity":
-                l_custom, g_custom, h_custom = connectivity_obj(
-                    pred_full_image,
-                    lambd,
-                    user_input.connectivity_target - 1,
-                    dataset.n_classes,
-                    *dataset.raw_img.shape,
-                    user_input.connectivity_direction,
-                )
-            elif user_input.objective == "circularity":
-                l_custom, g_custom, h_custom = circularity_obj(
-                    pred_full_image,
-                    lambd,
-                    user_input.circularity_target_class - 1,
-                    user_input.circularity_target_value,
-                    dataset.raw_img,
-                    *dataset.raw_img.shape,
-                )
-            else:
-                raise ValueError(
-                    f"Objective should be one of {'volume_fraction', 'connectivity', 'circularity'}. Received {user_input.objective}"
-                )
+            l_custom_sum = 0
+            g_custom_sum = []
+            h_custom_sum = 0
+            for objective in user_input.objective:
+                if objective == "volume_fraction":
+                    l_custom, g_custom, h_custom = volume_fraction_obj(
+                        pred_full_image,
+                        lambdas["volume_fraction"][l],
+                        target_distr=user_input.volume_fraction_targets,
+                    )
+                elif objective == "connectivity":
+                    l_custom, g_custom, h_custom = connectivity_obj(
+                        pred_full_image,
+                        lambdas["connectivity"][l],
+                        user_input.connectivity_target - 1,
+                        dataset.n_classes,
+                        *dataset.raw_img.shape,
+                        user_input.connectivity_direction,
+                    )
+                elif objective == "circularity":
+                    l_custom, g_custom, h_custom = circularity_obj(
+                        pred_full_image,
+                        lambdas["circularity"][l],
+                        user_input.circularity_target_class - 1,
+                        user_input.circularity_target_value,
+                        dataset.raw_img,
+                        *dataset.raw_img.shape,
+                    )
+                else:
+                    raise ValueError(
+                        f"Objective should be one of {'volume_fraction', 'connectivity', 'circularity'}. Received {user_input.objective}"
+                    )
+                
+                l_custom_sum += l_custom
+                g_custom_sum.append(g_custom)
+                h_custom_sum += h_custom
+
+            # Aggregate
+            g_custom_sum = np.sum(g_custom_sum, axis=0)
 
             # Re-reduce to only the labeled pixels
             g_custom_before_reshape = g_custom
@@ -356,11 +397,12 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[in
         # Reset to original labels
         yhat_labels = yhat_labels + 1
 
-        softmax_losses_per_lambda[lambd] = softmax_losses
-        custom_losses_per_lambda[lambd] = custom_losses
-        yhat_probabilities_per_lambda[lambd] = yhat_probs
-        yhat_labels_per_lambda[lambd] = yhat_labels
-        step_dict[lambd] = step_predictions
+        lambd_str = "{}".format({key: lambdas[key][l] for key in user_input.objective})
+        softmax_losses_per_lambda[lambd_str] = softmax_losses
+        custom_losses_per_lambda[lambd_str] = custom_losses
+        yhat_probabilities_per_lambda[lambd_str] = yhat_probs
+        yhat_labels_per_lambda[lambd_str] = yhat_labels
+        step_dict[lambd_str] = step_predictions
 
     loss_dict = {
         "softmax_losses_only": softmax_losses_per_lambda,
