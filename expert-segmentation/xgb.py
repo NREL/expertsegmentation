@@ -8,16 +8,15 @@ import porespy as ps
 from scipy.ndimage import distance_transform_edt
 from skimage import measure
 from sklearn.preprocessing import OneHotEncoder
+from skimage.filters import gaussian
+from skimage.segmentation import find_boundaries
+from skimage.util import view_as_blocks
 from torch import from_numpy
 from torch.nn import CrossEntropyLoss
 import xgboost as xgb
 
 from data import SegDataset, UserInputs
-from metrics import (
-    calculate_volume_fractions,
-    calculate_circularity,
-    calculate_kl_div,
-)
+from metrics import calculate_volume_fractions
 
 
 def softmax(z):
@@ -185,57 +184,260 @@ def connectivity_obj(
     return loss, gradient.flatten(), 0
 
 
-def circularity_obj(
+def circularity_obj_edges(
     pred: np.ndarray,
     lambd: int,
     c: int,
-    target_circularity: float,
-    img: np.ndarray,
+    n_classes: int,
     H: int,
     W: int,
     D: int = None,
 ):
     """
-    Define "circularity" loss term to penalize the shape of a particular
-    class towards a target average circularity across the image.
-
-    For every connected component of class c in the image:
-
-        circularity = feret max diameter / equivalent circle area diameter
-
-    where the feret max diameter is the longest distance between points
-    around a region’s convex hull contour, and equivalent circle area diameter
-    is the diameter of a circle with the same area as the region.
-
     loss =
-        lambda * || predicted_average_circularity - target_circularity ||**2
-
+        lambda * || sphericity - 1 ||**2
     gradient =
-        2 * lambda * || predicted_average_circularity - target_circularity ||
-
-
+        2 * lambda * || sphericity - 1 ||
     Args:
         pred: Predicted probabilities per pixel (n_pixels, n_classes)
         lambd: Lambda to weight connectivity loss term
         c: The class of interest
-        target_ciricularity: Average circularity
-        img: The original image with intensity values
+        n_classes: Number of classes
         H: Height of original input image
         W: Width of original input image
         D: Depth of original input image, if 3D, else None
-
     """
     if D is None:
         pred_labels = np.argmax(pred, axis=1).reshape((H, W)).astype(np.uint8)
     else:
         pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
+    
+    binary = (pred_labels == c).astype(np.uint8)
 
-    circularity = calculate_circularity(pred_labels, img, c)
-    loss = lambd * np.linalg.norm(circularity - target_circularity) ** 2
-    grad_val = 2 * lambd * circularity
-    gradient = np.full(pred.shape, grad_val)
+    # Mark the edges of the target phase
+    edges = find_boundaries(binary, mode='inner')
 
-    return loss, gradient.flatten(), 0
+    # If the prediction is all 1 value
+    if len(np.unique(binary)) <= 1:
+        return np.inf, np.zeros((*pred_labels.shape, n_classes)).flatten(), 0
+
+    window_size = 10
+
+    # Set up arrays to store per-pixel loss and gradient
+    gradient_all = np.zeros((*pred_labels.shape, n_classes))
+    gradient_all_n = np.ones(gradient_all.shape)
+    loss_all = np.zeros(pred_labels.shape)
+    loss_all_n = np.ones(loss_all.shape)
+
+    edge_pixels_x, edge_pixels_y, edge_pixels_z = edges.nonzero()
+    np.random.seed(42)
+    indices_to_include = np.random.choice(list(range(len(edge_pixels_x))),
+                                          size=len(edge_pixels_x)//10,
+                                          replace=False)
+    
+    # For each edge pixel
+    for i in indices_to_include:
+        x = edge_pixels_x[i]
+        y = edge_pixels_y[i]
+        z = edge_pixels_z[i]
+
+        # Get a subvolume centered on the pixel
+        xmin = x - window_size // 2
+        xmax = x + window_size // 2
+        ymin = y - window_size // 2
+        ymax = y + window_size // 2
+        zmin = z - window_size // 2
+        zmax = z + window_size // 2
+
+        # Check on the edges of the image
+        if xmin <= 0:
+            xmin = 0
+            xmax = window_size - 1
+        if ymin <= 0:
+            ymin = 0
+            ymax = window_size - 1
+        if zmin <= 0:
+            zmin = 0
+            zmax = window_size - 1
+        if xmax >= H:
+            xmax = H
+            xmin = H - window_size + 1
+        if ymax >= W:
+            ymax = W
+            ymin = W - window_size + 1
+        if zmax >= D:
+            zmax = D
+            zmin = D - window_size + 1
+
+        subvolume = binary[xmin : xmax + 1,
+                            ymin : ymax + 1,
+                            zmin : zmax + 1]
+
+        # Get the connected components within the subvolume
+        particles_uniquely_labeled, _ = measure.label(subvolume, return_num=True)
+
+        # Get the sphericity of each subvolume
+        props = ps.metrics.regionprops_3D(particles_uniquely_labeled)
+        sphericities = [prop.sphericity for prop in props]
+
+        # If the prediction is all 1 value, let the gradient be all zeros
+        # and let the loss be nan. These will be ignored in the average loss later
+        if len(props) == 0:
+            # subvol_loss = np.full(subvolume.shape, np.nan)
+            subvol_loss = np.zeros(subvolume.shape)
+            subvol_gradient = np.stack([subvol_gradient] * n_classes, axis=-1)
+
+        else:
+
+            # Set up an empty array to store the subvolume gradient
+            subvol_gradient = np.zeros(subvolume.shape)
+            
+            # Let the values of the gradient be the *distance to optimal sphericity (1)*
+            # for each uniquely-labeled particle
+            labels = [prop.label for prop in props]
+            for s, label in enumerate(labels):
+                sphericity = sphericities[s]
+                subvol_gradient[particles_uniquely_labeled == label] = abs(sphericity - 1)
+
+            # Loss = lambd * || sphericity - 1 ||**2
+            subvol_loss = np.mean(lambd * subvol_gradient**2)
+
+            # We only care about the particle *edges*. Set the gradients of any
+            # pixels not at the boundaries to 0.
+            subvolume_edges = find_boundaries(subvolume)
+            subvol_gradient[subvolume_edges == 0] = 0
+
+            # Stack gradients *per-class*
+            subvol_gradient = -1 * np.stack([subvol_gradient] * n_classes)
+            subvol_gradient[c] *= -1
+            subvol_gradient = np.moveaxis(subvol_gradient, 0, -1)
+            subvol_gradient = 2 * lambd * subvol_gradient
+
+        # Add the subvolume's gradient to the total gradient,
+        # and increase counter to take mean later
+        gradient_all[xmin : xmax + 1,
+                    ymin : ymax + 1,
+                    zmin : zmax + 1] += subvol_gradient
+        gradient_all_n[xmin : xmax + 1,
+                    ymin : ymax + 1,
+                    zmin : zmax + 1] += 1
+        
+        # Same for loss
+        loss_all[xmin : xmax + 1,
+                ymin : ymax + 1,
+                zmin : zmax + 1] += subvol_loss
+        loss_all_n[xmin : xmax + 1,
+                ymin : ymax + 1,
+                zmin : zmax + 1] += 1
+    
+
+    # Take average of all the overlapping gradients / losses
+    gradient_all = gradient_all / gradient_all_n
+    loss_all = loss_all / loss_all_n        
+
+    # Smooth the gradient to spread the effect at the edges
+    gradient_all = gaussian(gradient_all, channel_axis=-1)
+
+    # Return average pixelwise loss, ignoring nans
+    return np.nanmean(loss_all), gradient_all.flatten(), 0
+
+
+def circularity_obj(
+    pred: np.ndarray,
+    lambd: int,
+    c: int,
+    n_classes: int,
+    H: int,
+    W: int,
+    D: int = None,
+):
+    """
+    loss =
+        lambda * || sphericity - 1 ||**2
+    gradient =
+        2 * lambda * || sphericity - 1 ||
+    Args:
+        pred: Predicted probabilities per pixel (n_pixels, n_classes)
+        lambd: Lambda to weight connectivity loss term
+        c: The class of interest
+        n_classes: Number of classes
+        H: Height of original input image
+        W: Width of original input image
+        D: Depth of original input image, if 3D, else None
+    """
+    if D is None:
+        pred_labels = np.argmax(pred, axis=1).reshape((H, W)).astype(np.uint8)
+    else:
+        pred_labels = np.argmax(pred, axis=1).reshape((H, W, D)).astype(np.uint8)
+    
+    binary = (pred_labels == c).astype(np.uint8)
+
+    window_size = 15  # TODO make generalizable
+
+    # 15, 15, 15
+    # 5, 5, 5
+    # 25, 25, 25
+
+    # TODO MAKE THE BLOCK SIZE GENERALIZABLE !!
+    # subvolumes = view_as_blocks(binary, block_shape=(30, 29, 29))
+    subvolumes = view_as_blocks(binary, block_shape=(25, 25, 25))
+    s1, s2, s3, _, _, _ = subvolumes.shape
+    # subvolumes = subvolumes.reshape(s1*s2*s3, 30, 29, 29)
+    subvolumes = subvolumes.reshape(s1*s2*s3, 25, 25, 25)
+    gradient_all = np.zeros((*subvolumes.shape, 2))
+    loss_all = np.zeros(subvolumes.shape)
+
+    for j, subvolume in enumerate(subvolumes):
+
+        particles_uniquely_labeled, _ = measure.label(subvolume, return_num=True)
+
+        props = ps.metrics.regionprops_3D(particles_uniquely_labeled)
+        sphericities = [prop.sphericity for prop in props]
+
+        # Set up an empty array to store the gradient
+        gradient = np.zeros(subvolume.shape)
+
+        # If the prediction is all 1 value, let the gradient be all zeros
+        # and let the loss be nan. These will be ignored in the average loss later
+        if len(props) == 0:
+            loss = np.full(subvolume.shape, np.nan)
+            gradient = np.stack([gradient] * n_classes, axis=-1)
+
+            loss_all[j] = loss
+            gradient_all[j] = gradient
+            continue
+        
+        # Let the values of the gradient be the *distance to optimal sphericity (1)*
+        # for each uniquely-labeled particle
+        labels = [prop.label for prop in props]
+        for i, label in enumerate(labels):
+            sphericity = sphericities[i]
+            gradient[particles_uniquely_labeled == label] = abs(sphericity - 1)
+
+        # Loss = lambd * || sphericity - 1 ||**2
+        loss = np.mean(lambd * gradient**2)
+
+        # We only care about the particle *edges*. Set the gradients of any
+        # pixels not at the boundaries to 0.
+        edges = find_boundaries(subvolume)
+        gradient[edges == 0] = 0
+
+        # There needs to be a gradient *per-class*. To erode, set the gradient of the 
+        # *target phase* to be positive, and the gradient of the other classes negative.
+        gradient = -1 * np.stack([gradient] * n_classes)
+        gradient[c] *= -1
+        gradient = np.moveaxis(gradient, 0, -1)
+        gradient = 2 * lambd * gradient
+
+        gradient_all[j] = gradient
+        loss_all[j] = loss
+
+    loss_all = loss_all.reshape(pred_labels.shape)
+    gradient_all = gradient_all.reshape((*pred_labels.shape, n_classes))
+
+    gradient_all = gaussian(gradient_all, channel_axis=-1)
+
+    return np.nanmean(loss_all), gradient_all.flatten(), 0
 
 
 def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[int] = [5, 25, 50, 75, 95]):
@@ -263,6 +465,8 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[in
         "num_class": dataset.n_classes,
     }
 
+    num_epochs = user_input.num_epochs
+
     # The unlabeled pixels are 0 in Ilastik. For XGBoost, the class indices
     # should start from 0, so redefine "unlabeled" to be the largest index.
     dataset.labeled_img[dataset.labeled_img == 0] = dataset.n_classes + 1
@@ -284,7 +488,7 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[in
 
     # Run default loss first
     print("Evaluating with native loss...")
-    model_default_loss = xgb.train(params, dtrain, 100)
+    model_default_loss = xgb.train(params, dtrain, num_epochs)
     yhat_probs_default = model_default_loss.predict(dtest)
     yhat_probs_default = yhat_probs_default.reshape(
         (*dataset.raw_img_with_features.shape[:-1], dataset.n_classes)
@@ -310,13 +514,13 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[in
 
         print("Evaluating for lambdas: {}".format({key: lambdas[key][l] for key in user_input.objective}))
 
-        # Run training and save losses (100 epochs)
+        # Run training and save losses
         softmax_losses = []
         custom_losses = []
         step_predictions = dict()
-        for i in range(100):
+        for i in range(num_epochs):
             if i % 10 == 0:
-                print(f"\tepoch {i}")
+                print(f"\tepoch {i} / {num_epochs - 1}")
             pred = model.predict(dtrain)
 
             # Softmax loss ONLY FOR THE TRAINING PIXELS (the ones w a label)
@@ -343,19 +547,6 @@ def run_xgboost(dataset: SegDataset, user_input: UserInputs, save_steps: list[in
                         dataset.n_classes,
                         *dataset.raw_img.shape,
                         user_input.connectivity_direction,
-                    )
-                elif objective == "circularity":
-                    l_custom, g_custom, h_custom = circularity_obj(
-                        pred_full_image,
-                        lambdas["circularity"][l],
-                        user_input.circularity_target_class - 1,
-                        user_input.circularity_target_value,
-                        dataset.raw_img,
-                        *dataset.raw_img.shape,
-                    )
-                else:
-                    raise ValueError(
-                        f"Objective should be one of {'volume_fraction', 'connectivity', 'circularity'}. Received {user_input.objective}"
                     )
                 
                 l_custom_sum += l_custom

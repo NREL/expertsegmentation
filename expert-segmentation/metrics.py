@@ -3,22 +3,20 @@ Define domain metrics of interest.
 """
 
 import os
-import cv2
 import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import porespy as ps
 from prettytable import PrettyTable
 from scipy.stats import entropy
 import seaborn as sns
-from skimage.measure import label, regionprops_table
-from skimage.morphology import remove_small_objects
-
+from skimage.measure import label
 
 from data import SegDataset, UserInputs
 
 
-def calculate_circularity(labels: np.ndarray, c: int):
+def calculate_average_circularity(labels: np.ndarray, c: int):
     """Calculate average circularity of given class in an image.
 
     Args:
@@ -37,29 +35,16 @@ def calculate_circularity(labels: np.ndarray, c: int):
     if n == 1:
         return -1
 
-    # Remove tiny particles - this messes up the feret diameter calculation
-    particles_uniquely_labeled = remove_small_objects(
-        particles_uniquely_labeled, min_size=8
-    )
-
-    props = regionprops_table(
-        particles_uniquely_labeled,
-        properties=(
-            "equivalent_diameter_area",
-            "feret_diameter_max",
-        ),
-    )
-
-    circularity = props["feret_diameter_max"] / props["equivalent_diameter_area"]
-
-    return circularity.mean()
+    props = ps.metrics.regionprops_3D(particles_uniquely_labeled)
+    sphericities = [prop.sphericity for prop in props]
+    return np.mean(sphericities)
 
 
 def calculate_circularities(labels, n_classes):
     circs = dict()
     classes = list(range(n_classes))
     for c in classes:
-        circs[c] = calculate_circularity(labels, c)
+        circs[c] = calculate_average_circularity(labels, c)
     return circs
 
 
@@ -115,6 +100,13 @@ def calculate_n_components(labels: np.ndarray, target_class: int):
     binary = (labels == target_class).astype(np.uint8)
     _, n_isolated_components = label(binary, return_num=True)
     return n_isolated_components
+
+def calculate_n_components_per_class(labels: np.ndarray, n_classes: int):
+
+    result_dict = dict()
+    for c in range(n_classes):
+        result_dict[c] = calculate_n_components(labels, c)
+    return result_dict
 
 
 def save_gif(vol: np.ndarray, img_path: str):
@@ -245,7 +237,7 @@ def plot_loss_curve(loss_dict, lambd, plot_type = 'all'):
 def plot_steps_3d_slice(step_dict: dict,
                       result_dict: dict,
                       lambd: float,
-                      dataset,
+                      raw_img: np.ndarray,
                       steps: list[int] = None,
                       slice_idx: int = 0,
                     ):
@@ -256,7 +248,7 @@ def plot_steps_3d_slice(step_dict: dict,
     fig, axes = plt.subplots(len(steps), 3)
     for i, epoch in enumerate(steps):
         pred_labels = step_dict[lambd][epoch]['prediction'].argmax(axis=-1) + 1
-        axes[i, 0].imshow(dataset.raw_img[slice_idx], cmap='gray')
+        axes[i, 0].imshow(raw_img[slice_idx], cmap='gray')
         axes[i, 1].imshow(pred_labels[slice_idx], cmap='gray_r')
         diff = pred_labels != result_dict['labels_default_loss']
         axes[i, 2].imshow(diff[slice_idx], cmap='Reds')
@@ -345,13 +337,21 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
         user_input: User input dictionary with domain knowledge targets
 
     Return:
-        metrics_df: Dataframe with volume fraction, connectivity, and circularity
-                    for each class for prediction with default loss and for each
-                    lambda with custom loss.
-        evaluation_df: Dataframe with comparison to target for prediction with default
-                       loss and for each lambda with custom loss.
+        metrics_df: Dataframe with volume fraction, number of components,
+                    and average circularity for each class for prediction
+                    with default loss and for each lambda with custom loss.
 
     """
+
+    def _convert_lambd_for_table(lambd):
+        lambd_str = ''
+        
+        for elem in lambd.split(','):
+            metric = elem.split(',')[0].split(':')[0].replace('\'', '').replace("{", '')
+            val = elem.split(',')[0].split(':')[1]
+            lambd_str += f"{val} ({metric})"
+        
+        return lambd_str
 
     yhat_default_loss = result_dict["labels_default_loss"]
     yhat_custom_loss = result_dict["labels_custom_loss"]
@@ -360,32 +360,36 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
     vfs_pred_default = calculate_volume_fractions(
         yhat_default_loss - 1, dataset.n_classes
     )
+    n_components_pred_default = calculate_n_components_per_class(
+        yhat_default_loss -1, dataset.n_classes
+    )
     circs_pred_default = calculate_circularities(
         yhat_default_loss - 1, dataset.n_classes
     )
-    kl_div = calculate_kl_div(
-        np.array(list(vfs_pred_default.values())),
-        user_input.volume_fraction_targets,
-    )
-    circ_perc_change = (
-        circs_pred_default[user_input.circularity_target_class - 1]
-        - user_input.circularity_target_value
-    ) / user_input.circularity_target_value
+
+    if "volume_fraction" in user_input.objective:
+        # Comparison to target
+        kl_div = calculate_kl_div(
+            np.array(list(vfs_pred_default.values())),
+            user_input.volume_fraction_targets,
+        )
+
+        evaluation_df = pd.DataFrame(
+            {
+                "lambda": ["N/A (default loss)"],
+                "volume fraction: kl div to target": [kl_div],
+            }
+        )
+    else:
+        evaluation_df = pd.DataFrame()
 
     metrics_df = pd.DataFrame(
         {
             "lambda": ["N/A (default loss)"] * dataset.n_classes + [""],
             "class": list(range(1, dataset.n_classes + 1)) + [""],
             "volume fraction": list(vfs_pred_default.values()) + [""],
+            "num_components": list(n_components_pred_default.values()) + [""],
             "circularity": list(circs_pred_default.values()) + [""],
-        }
-    )
-
-    evaluation_df = pd.DataFrame(
-        {
-            "lambda": ["N/A (default loss)"],
-            "volume fraction: kl div to target": [kl_div],
-            "circularity: % change from target": [circ_perc_change],
         }
     )
 
@@ -394,43 +398,46 @@ def print_metrics(result_dict: dict, dataset: SegDataset, user_input: UserInputs
         vfs_pred = calculate_volume_fractions(
             yhat_custom_loss[lambd] - 1, dataset.n_classes
         )
+        n_components_pred = calculate_n_components_per_class(
+            yhat_custom_loss[lambd] - 1, dataset.n_classes
+        )
         circs_pred = calculate_circularities(
             yhat_custom_loss[lambd] - 1, dataset.n_classes
         )
 
-        kl_div = calculate_kl_div(
-            np.array(list(vfs_pred.values())),
-            user_input.volume_fraction_targets,
-        )
-        circ_perc_change = (
-            circs_pred[user_input.circularity_target_class - 1]
-            - user_input.circularity_target_value
-        ) / user_input.circularity_target_value
+        if "volume_fraction" in user_input.objective:
+            # Comparison to target
+            kl_div = calculate_kl_div(
+                np.array(list(vfs_pred.values())),
+                user_input.volume_fraction_targets,
+            )
+
+            temp_df = pd.DataFrame(
+                {
+                    "lambda": [_convert_lambd_for_table(lambd)],
+                    "volume fraction: kl div to target": [kl_div],
+                }
+            )
+            evaluation_df = pd.concat([evaluation_df, temp_df])
 
         temp_df = pd.DataFrame(
             {
-                "lambda": [lambd] * dataset.n_classes + [""],
+                "lambda": [_convert_lambd_for_table(lambd)] * dataset.n_classes + [""],
                 "class": list(range(1, dataset.n_classes + 1)) + [""],
                 "volume fraction": list(vfs_pred.values()) + [""],
+                "num_components": list(n_components_pred.values()) + [""],
                 "circularity": list(circs_pred.values()) + [""],
             }
         )
         metrics_df = pd.concat([metrics_df, temp_df])
 
-        temp_df = pd.DataFrame(
-            {
-                "lambda": [lambd],
-                "volume fraction: kl div to target": [kl_div],
-                "circularity: % change from target": [circ_perc_change],
-            }
-        )
-        evaluation_df = pd.concat([evaluation_df, temp_df])
-
     # Prettyprint tables from dataframes
     tab = PrettyTable(list(metrics_df.columns))
     tab.add_rows(metrics_df.values.tolist())
-    tab_eval = PrettyTable(list(evaluation_df.columns))
-    tab_eval.add_rows(evaluation_df.values.tolist())
-    print(tab, "\n", tab_eval)
+
+    if "volume_fraction" in user_input.objective:
+        tab_eval = PrettyTable(list(evaluation_df.columns))
+        tab_eval.add_rows(evaluation_df.values.tolist())
+        print(tab, "\n", tab_eval)
 
     return metrics_df, evaluation_df

@@ -1,13 +1,14 @@
 {
     "objective": ["connectivity", "volume_fraction"],
 
+    "num_epochs": 100,
+
     "volume_fraction_targets": {
         "1": 0.60,
-        "2": 0.20,
-        "3": 0.20
+        "2": 0.40
     },
 
-    "connectivity_target": 3,
+    "connectivity_target_class": 3,
     "connectivity_direction": "max",
 
     "lambdas": {

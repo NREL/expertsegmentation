@@ -25,19 +25,16 @@ def load_json(fn):
 class UserInputs:
     def __init__(self, user_input_fn):
         self.user_input_dict = load_json(user_input_fn)
+        self.num_epochs = self.user_input_dict["num_epochs"]
         self.filters = self.user_input_dict["filters"]
         self.objective = self.user_input_dict["objective"]
         self.lambdas = self.user_input_dict["lambdas"]
 
-        self.check_lambdas()
+        self.check_objectives_and_lambdas()
         
         if "connectivity" in self.objective:
             self.connectivity_direction = self.user_input_dict["connectivity_direction"]
-            self.connectivity_target = self.user_input_dict["connectivity_target"]
-
-        if "circularity" in self.objective:
-            self.circularity_target_class = self.user_input_dict["circularity_target_class"]
-            self.circularity_target_value = self.user_input_dict["circularity_target_value"]
+            self.connectivity_target = self.user_input_dict["connectivity_target_class"]
 
         if "volume_fraction" in self.objective:
             self.volume_fraction_targets = np.array(
@@ -45,10 +42,15 @@ class UserInputs:
             )
             self.check_vf()
 
-    def check_lambdas(self):
-        # Make sure that the lambdas match the objectives and
-        # have the same length
+    def check_objectives_and_lambdas(self):
+        # Make sure that the objectives specified are supported,
+        # and that the lambdas match the objectives and have the
+        # same length.
         for obj in self.objective:
+            if obj not in {'volume_fraction', 'connectivity'}:
+                raise ValueError(
+                    f"Objective should be one of {'volume_fraction', 'connectivity'}. Received {obj}"
+                )
             if obj not in self.lambdas:
                 raise ValueError(f"{obj} specified as an objective but no lambda provided.")
         n_lambdas = [len(self.lambdas[obj]) for obj in self.lambdas]
