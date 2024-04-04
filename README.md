@@ -17,6 +17,12 @@ $ conda activate expert-seg
 $ pip install .
 ```
 
+To see the docs locally, run:
+```
+$ sphinx-build -M html docs/source/ docs/build/
+```
+and then open docs/build/html/index.html in a browser.
+
 
 ## Quickstart
 

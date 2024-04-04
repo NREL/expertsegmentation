@@ -28,7 +28,7 @@ Load images and training labels
 Create a segmentation dataset
 ------------------------------
 
-To compute additional features, specify a dictionary with the desired filters. See <>
+To compute additional features, specify a dictionary with the desired filters. See API documentation
 for a list of supported filters.
 
 .. code:: python
