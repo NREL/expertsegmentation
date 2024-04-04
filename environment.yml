@@ -13,7 +13,12 @@ dependencies:
   - scipy=1.11.3
   - tifffile=2023.9.26
   - pip:
+    - myst-parser
+    - sphinx_rtd_theme
     - xgboost=2.0.0
     - structure-tensor=0.2.0
     - torch=2.1.0
     - opencv-python=4.8.1
+    - sphinx
+    - furo
+    - cupy-cuda12x

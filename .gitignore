@@ -1,4 +1,7 @@
 .vscode
 __pycache__
-expert-segmentation/data/*
+expertsegmentation/data/*
 foo*
+*.egg-info
+build
+test_scripts
