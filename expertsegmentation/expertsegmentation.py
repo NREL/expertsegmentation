@@ -11,10 +11,6 @@ from expertsegmentation.objectives import *
 from expertsegmentation.named_constants import *
 
 
-# TODO at segmentation time check that dataset's labels match number of labels provided in target
-# TODO for conn check that the target class provided isn't out of range
-
-
 class SegmentModel:
     """
     Base model class for segmentation.
@@ -154,6 +150,7 @@ class SegmentModel:
             result_dict (dict): Dictionary with results using default loss, custom loss (if applicable),
                                 and intermediate steps (if applicable)
             loss_dict (dict):   Dictionary with softmax and custom losses during training with custom loss.
+            
         """
         if GPUtil.getAvailable():
             device = "cuda"
