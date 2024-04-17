@@ -3,16 +3,12 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-import expertsegmentation
-
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'Expert Segmentation'
 copyright = '2024, Nina Prakash'
 author = 'Nina Prakash'
-version = expertsegmentation.__version__
-release = expertsegmentation.__version__
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
