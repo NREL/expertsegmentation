@@ -4,25 +4,20 @@ ExpertSegmentation is a decision tree-based semantic segmentation tool for micro
 
 Supported targets include volume fractions and minimum or maximum phase connectivity.
 
+Docs: https://expertsegmentation.readthedocs.io/en/latest/index.html
+
 
 ## Setup
 
 Recommended to use [Anaconda distribution](https://www.anaconda.com/download) for Python environments and package management.
 
-After cloning the [expert-segmentation repo](https://github.nrel.gov/nprakash/expert-segmentation) navigate to the top level:
+After cloning the [expertsegmentation repo](https://github.com/NREL/expertsegmentation) navigate to the top level:
 
 ```
 $ conda env create -f environment.yml
 $ conda activate expert-seg
 $ pip install .
 ```
-
-To see the docs locally, run:
-```
-$ sphinx-build -M html docs/source/ docs/build/
-```
-and then open docs/build/html/index.html in a browser.
-
 
 ## Quickstart
 
