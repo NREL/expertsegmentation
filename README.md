@@ -4,7 +4,8 @@ ExpertSegmentation is a decision tree-based semantic segmentation tool for micro
 
 Supported targets include volume fractions and minimum or maximum phase connectivity.
 
-Docs: https://expertsegmentation.readthedocs.io/en/latest/index.html
+* MIT License
+* Docs: https://expertsegmentation.readthedocs.io/en/latest/index.html
 
 
 ## Setup
