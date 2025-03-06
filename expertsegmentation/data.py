@@ -14,6 +14,24 @@ from structure_tensor import (
 import tifffile
 from typing import Union
 
+from expertsegmentation.named_constants import DEFAULT_FILTERS
+
+
+def load_example_data():
+    """
+    For convenience, load example data.
+    Returns:
+        A (75,75,75) NMC microCT image.
+        Sparse labels on the image.
+        The image with additional channels for transformation features,
+        computed using the defaults.
+    """
+    img = tifffile.imread("example_data/nmc1cal.tif")
+    labels = tifffile.imread("example_data/nmc1cal_labels.tiff")
+    img_with_features = tifffile.imread("example_data/nmc1cal_with_features.tiff")
+
+    return SegDataset(img=img, labeled_img=labels, img_with_features=img_with_features)
+
 
 class SegDataset:
     """Class responsible for organizing and preprocessing data.
@@ -23,11 +41,11 @@ class SegDataset:
                                              Should be 2 or 3D, single-channel
             labeled_img (np.ndarray):        Filepath to labeled input image.
                                 Should be dtype integer with 0 = unlabeled
-            filters:            Dictionary defining which filters to apply
             img_with_features:  (Optional) Input image with
                                 features already computed at axis=-1 (shape (H, W, [D], num_features)). If provided,
                                 features are not re-computed.
-            save_fn:            If provided, filepath to save image with
+            filters:            Dictionary defining which filters to apply
+            save_path:            If provided, filepath to save image with
                                 computed features.
 
         Returns:
@@ -35,9 +53,9 @@ class SegDataset:
         """
     def __init__(
         self,
-        img: str,
-        labeled_img: str,
-        img_with_features: Union[str, None] = None,
+        img: np.ndarray,
+        labeled_img: np.ndarray,
+        img_with_features: Union[np.ndarray, None] = None,
         filters: dict = None,
         save_path: str = None,
     ):
@@ -47,9 +65,18 @@ class SegDataset:
         self.filters = filters
         self.save_fn = save_path
 
+        if labeled_img.shape != img.shape:
+            raise ValueError(f"Expected img and labels to have the same dimensions.")
+
         if img_with_features is not None:
             self.img_with_features = img_with_features
+            if img_with_features.shape[:-1] != img.shape:
+                raise ValueError(f"Expected img and labels to have the same dimensions up to last channel of img_with_features.")
+        
         else:
+            if filters is None:
+                self.filters = DEFAULT_FILTERS
+            print('Computing additional features...')
             self.add_filter_features()
 
         self.n_classes = len(np.unique(self.labeled_img)) - 1  # Excluding 0
@@ -173,7 +200,7 @@ class SegDataset:
             )
 
     @staticmethod
-    def rescale_to_uint8(img):
+    def rescale_to_uint8(img: np.ndarray):
         """
         Rescale the values of an array to the range (0, 255)
 
@@ -189,7 +216,7 @@ class SegDataset:
         return img_uint8
 
     @staticmethod
-    def rescale_to_uint16(img):
+    def rescale_to_uint16(img: np.ndarray):
         """
         Rescale the values of an array to the range (0, 65535)
 

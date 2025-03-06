@@ -1,26 +1,36 @@
+from typing import Union
+
 import numpy as np
 import porespy as ps
 from scipy.ndimage import distance_transform_edt
 from skimage import measure
 from sklearn.preprocessing import OneHotEncoder
+import xgboost as xgb
 
 from expertsegmentation.metrics import calculate_volume_fractions
 
 
-def softmax(z):
+def softmax(z: Union[float, np.ndarray]):
+    """
+    Softmax function
+
+    Args:
+        z (float, np.ndarray)   Input argument
+
+    Returns:
+        f(z) = exp(z) / sum(exp(z))
+    """
     z -= np.max(z)
     sm = (np.exp(z).T / np.sum(np.exp(z), axis=1)).T
     return sm
 
 
-def softmaxobj(preds, dtrain):
+def softmaxobj(preds: np.ndarray, dtrain: xgb.DMatrix):
     """Re-implementation of the native softmax loss in XGBoost.
 
     Args:
         preds: (N, K) array, N = #data, K = #classes.
         dtrain: DMatrix object with training data.
-        h: Height of image for reshaping
-        w: Width of image for reshaping
 
     Returns:
         grad: N*K array with gradient values.
@@ -32,7 +42,7 @@ def softmaxobj(preds, dtrain):
 
     # When objective=softprob, preds has shape (N, K). Convert the labels
     # to one-hot encoding to match this shape.
-    labels = OneHotEncoder(sparse="deprecated", sparse_output=False).fit_transform(
+    labels = OneHotEncoder(sparse_output=False).fit_transform(
         labels.reshape(-1, 1)
     )
 
@@ -43,7 +53,7 @@ def softmaxobj(preds, dtrain):
     return grad.flatten(), hess.flatten()
 
 
-def volume_fraction_obj(pred, lambd, target_distr):
+def volume_fraction_obj(pred: np.ndarray, lambd: float, target_distr: np.ndarray):
     """
 
     Define volume fraction loss term to penalize when the volume
@@ -56,6 +66,14 @@ def volume_fraction_obj(pred, lambd, target_distr):
     grad =
         2 * lambda * || [pred_vf_0, pred_vf_1, pred_vf_2, pred_vf_3, pred_vf_4]
                         - [vf_0, vf_1, vf_2, vf_3, vf_4] ||
+
+    Args:
+        pred (np.ndarray): Predicted probabilities per pixel (n_pixels, n_classes)
+        lambd (float): Weighting on target volume fraction property.
+        target_distr (np.ndarray):  Array with target volume fractions per phase.
+
+    Returns:
+        loss, gradient, hessian
 
     """
 

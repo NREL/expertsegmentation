@@ -28,8 +28,8 @@ class SegmentModel:
 
     """
     def __init__(self,
-                 objective: Union[str, list[str], set[str]],
-                 target: Union[dict, int],
+                 objective: Union[str, list[str], set[str]] = None,
+                 target: Union[dict, int] = None,
                  direction: str = None,
                  lambd: Union[float, list[list[float]]] = None,
                  n_epochs: int = 100,
@@ -102,7 +102,14 @@ class SegmentModel:
             raise ValueError(f"Unsupported objective. Supported objectives include {SUPPORTED_OBJECTIVES}. Received {objective}.")
 
         
-    def _check_vf_inputs(self, target):
+    def _check_vf_inputs(self, target: dict):
+        """
+        Ensure that volume fraction inputs are valid.
+
+        Args:
+            target (dict):  Dictionary where keys are phase labels
+                            and values are volume fractions.
+        """
         # Target should be a dictionary
         if not isinstance(target, dict):
             raise ValueError("Expected target to be a dictionary for objective 'volume_fraction'.")
@@ -122,15 +129,29 @@ class SegmentModel:
         return target_array
 
 
-    def _check_vf(self, target_array):
+    def _check_vf(self, target_array: np.ndarray):
+        """
+        Ensure that volume fractions are valid.
+
+        Args:
+            target_array (np.ndarray):  Array of volume fractions per phase.
+        """
         # Make sure that volume fraction targets sum to 1
-        vf_sum = target_array.sum()
+        vf_sum = target_array.round(10).sum()
         if vf_sum != 1:
             raise ValueError(
                 f"Volume fraction targets must sum to 1. Received targets that sum to {vf_sum}."
             )
      
-    def _check_conn_inputs(self, target, direction):
+    def _check_conn_inputs(self, target: int, direction: str):
+        """
+        Ensure that connectivity targets are valid.
+
+        Args:
+            target (int):       Label of phase of interest
+            direction (str):    Whether the phase of interest
+                                should be minimized or maximized.
+        """
         if not isinstance(target, int):
             raise ValueError(f"Expected target to be type `int` for target 'connectivity'.")
         if direction is None:
@@ -284,10 +305,10 @@ class SegmentModel:
                 softmax_losses.append(l_softmax)
                 custom_losses.append(l_custom)
 
-                g = g_softmax + g_custom
-                h = h_softmax + h_custom
+                g = (g_softmax + g_custom).reshape(pred.shape)
+                h = (h_softmax + h_custom).reshape(pred.shape)
 
-                model.boost(dtrain, g, h)
+                model.boost(dtrain, i, g, h)
 
                 # Save intermediate steps
                 if i in self.save_steps:

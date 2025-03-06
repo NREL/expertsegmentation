@@ -17,6 +17,7 @@ def calculate_volume_fractions(pred_labels: np.ndarray, n_classes: int):
     Args:
         pred_labels (np.ndarray)    Array with shape (n_pixels, ) which has values in
                                     {0, 1, 2, 3, 4} representing the predicted classes
+        n_classes (int)             Number of phases in the image
 
     Returns:
         result_dict (dict)          Dictionary with keys [0, 1, ..., n_classes-1] and values that
@@ -102,7 +103,7 @@ def calculate_average_circularity(labels: np.ndarray, c: int):
     return np.mean(sphericities)
 
 
-def calculate_average_circularity_per_class(labels, n_classes):
+def calculate_average_circularity_per_class(labels: np.ndarray, n_classes: int):
     """Calculate average circularity per labeled class in an image.
 
     Args:

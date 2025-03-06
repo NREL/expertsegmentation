@@ -6,6 +6,7 @@ dependencies:
   - numpy=1.23.5
   - pandas=2.1.1
   - pip
+  - porespy=2.4.2
   - prettytable=3.9.0
   - py-xgboost-gpu=1.7.6
   - scikit-image=0.22.0
@@ -15,7 +16,7 @@ dependencies:
   - pip:
     - myst-parser==2.0.0
     - sphinx_rtd_theme==2.0.0
-    - xgboost=2.0.0
+    - xgboost=2.1.4
     - structure-tensor=0.2.0
     - torch=2.1.0
     - opencv-python=4.8.1

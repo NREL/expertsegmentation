@@ -22,14 +22,21 @@ def convert_lambd_for_table(lambd):
     return lambd_str
 
 
-def plot(result_dict: dict, loss_dict: dict, n_epochs: int, img: np.ndarray, slice_idx_3d: int = None):
+def plot(result_dict: dict,
+         loss_dict: dict,
+         n_epochs: int,
+         img: np.ndarray,
+         slice_idx_3d: int = None):
     """Display segmented image.
 
     Args:
-        result_dict:    Dictionary returned from run_xgboost() with keys
-                        "labels_default_loss" and "labels_custom_loss"
-        slice_idx_3d:   If the data is 3D, provide a slice index to plot
-                        (just xy plane for now)
+        result_dict (dict): Dictionary returned from run_xgboost() with keys
+                            "labels_default_loss" and "labels_custom_loss"
+        loss_dict (dict):   Dictionary returned from run_xgboost()
+        n_epochs (int):     Number of epochs model was trained for
+        img (np.ndarray):   Original raw input image
+        slice_idx_3d (int): If the data is 3D, provide a slice index to plot
+                            (just xy plane for now)
     """
 
     yhat_default_loss = result_dict["labels_default_loss"]
@@ -100,14 +107,16 @@ def plot(result_dict: dict, loss_dict: dict, n_epochs: int, img: np.ndarray, sli
 def print_metrics_table(
                   result_dict: dict,
                   n_classes: int,
-                  objectives,
-                  target_vf):
+                  objectives: Union[list, str],
+                  target_vf: dict):
     
     """Compute, display, and return dataframes of domain metrics.
 
     Args:
         result_dict: Dictionary returned by run_xgboost()
-        dataset: Original dataset used for the segmentation
+        n_classes: Number of phases in the image
+        objectives: List or string of target objectives
+        target_vf: Target volume fraction dictionary
 
     Return:
         metrics_df: Dataframe with volume fraction, number of components,
@@ -206,6 +215,15 @@ def plot_steps_3d_slice(
                       slice_idx: int = 0,
                       lambd: Union[int, float] = None,
                     ):    
+    """
+    Plot intermediate training steps.
+
+    result_dict (dict): Dictionary returned by run_xgboost()
+    img (np.ndarray):   The original image of interest.
+    slice_idx (int):    Index of XY slice of volume to plot.
+    lambd (float):      Weighting on target property.
+
+    """
     step_dict = result_dict["intermediate_epoch_results"]
 
     # If a lambda is not provided, use the first one
@@ -240,9 +258,18 @@ def plot_steps_3d_slice(
     return fig
 
 
-def plot_loss_curve(loss_dict, lambd, plot_type = 'all'):
+def plot_loss_curve(loss_dict: dict,
+                    lambd: float,
+                    plot_type = 'all'):
     """
     Plot loss curves from training.
+
+    Args:
+        loss_dict (dict):   Dictionary returned from run_xgboost()
+        lambd (float):      Weight on target property
+        plot_type (str):    Reflects whether to plot all losses,
+                            only the total, only the custom loss,
+                            or only the softmax loss component.
     """
     plot_types = {'all', 'total_only', 'custom_only', 'softmax_only'}
     if plot_type not in plot_types:
@@ -298,7 +325,7 @@ def save_gif(vol: np.ndarray, img_path: str):
 
     Args:
         vol (np.ndarray): 3D volume to make gif of
-        save_dir (str): Path to directory to save gif
+        img_path (str): Path to directory to save gif
 
     """
 
